@@ -1,0 +1,9 @@
+{
+  "extends": "$app/tsconfig",
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "types": ["$app/types", "vite/client"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte", "test/**/*.ts", "scripts/**/*.ts", "vite.config.ts", "vitest.config.ts"]
+}

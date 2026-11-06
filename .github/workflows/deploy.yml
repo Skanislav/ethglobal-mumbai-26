@@ -1,0 +1,60 @@
+name: Build & Pin to IPFS
+
+# Builds the static bundle and pins it to IPFS on every push to main. The CID lands in the
+# job summary. Pointing ENS at a CID stays a manual step in the ENS app so no on-chain key
+# ever lives in CI.
+#
+# Secrets: PINATA_JWT (required), PINATA_GATEWAY (optional, a dedicated gateway host).
+# Without PINATA_JWT the pin step fails loudly rather than skipping — a green run that
+# published nothing is worse than a red one.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ipfs-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the pinned version from package.json's `packageManager` field.
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      # Same gate as local dev: the build is only shippable if check and tests pass.
+      - run: bun run check
+      - run: bun run test
+
+      - run: bun run build
+
+      - name: Pin to IPFS
+        env:
+          PINATA_JWT: ${{ secrets.PINATA_JWT }}
+          PINATA_GATEWAY: ${{ secrets.PINATA_GATEWAY }}
+        run: bun run pin
+
+      - name: Report CID
+        run: |
+          CID=$(cat .cid)
+          echo "### Pinned to IPFS" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- CID: \`$CID\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Preview: https://dweb.link/ipfs/$CID/" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Set the ENS contenthash to \`ipfs://$CID\` in app.ens.domains." >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cid
+          path: .cid
+          if-no-files-found: error

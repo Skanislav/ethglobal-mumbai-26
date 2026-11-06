@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Safe Signer Onboarding">
+  <rect width="64" height="64" rx="14" fill="#0b2b17"/>
+  <path d="M20 22h24M20 32h16M20 42h24" stroke="#12ff80" stroke-width="5" stroke-linecap="round"/>
+</svg>

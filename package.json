@@ -1,0 +1,56 @@
+{
+  "name": "safe-signer-onboarding",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "packageManager": "bun@1.4.2",
+  "scripts": {
+    "dev.raw": "vite dev",
+    "build.raw": "vite build && svelte-kit sync",
+    "preview.raw": "vite preview",
+    "check.raw": "svelte-kit sync && svelte-check",
+    "test.raw": "vitest run",
+    "pin.raw": "bun scripts/pin.ts",
+    "deploy.raw": "bun run --bun build.raw && bun scripts/pin.ts",
+    "dev": "bun run --bun dev.raw",
+    "build": "bun run --bun build.raw",
+    "preview": "bun run --bun preview.raw",
+    "pin": "bun run --bun pin.raw",
+    "deploy": "bun run --bun deploy.raw",
+    "check": "bun run --bun check.raw",
+    "test": "bun run --bun test.raw",
+    "test:unit": "bun test test/unit",
+    "test:fork": "bun scripts/e2e-fork.ts"
+  },
+  "dependencies": {
+    "@anon-rpc/browser-harness": "0.4.0",
+    "@arx-research/libhalo": "1.21.0",
+    "@ledgerhq/hw-app-eth": "7.12.1",
+    "@ledgerhq/hw-transport-webhid": "6.36.0",
+    "@noble/curves": "1.9.7",
+    "@safe-global/protocol-kit": "8.0.11",
+    "@safe-global/safe-deployments": "1.37.67",
+    "@safe-global/safe-modules-deployments": "3.0.14",
+    "@trezor/connect-web": "10.0.1",
+    "buffer": "6.0.3",
+    "process": "0.11.10",
+    "svelte": "5.57.3",
+    "stream-browserify": "3.0.0",
+    "util": "0.12.5",
+    "viem": "2.57.16"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "4.0.1",
+    "@sveltejs/kit": "3.1.1",
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "happy-dom": "21.0.4",
+    "svelte-check": "4.7.8",
+    "typescript": "5.9.3",
+    "vite": "8.3.6",
+    "vitest": "5.1.0"
+  }
+}
