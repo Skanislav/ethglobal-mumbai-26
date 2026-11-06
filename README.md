@@ -50,6 +50,18 @@ not name. Reading the blob back goes through `https://api.sepolia.blobscan.com`,
 until the indexer lists it (the poll doubles as the inclusion wait); a link whose blob is
 not indexed yet says so instead of failing silently.
 
+That endpoint answers `200 application/json` with the blob as a **quoted hex string**
+(`"0x00…"`, per its OpenAPI schema: `type: string`, `pattern: ^0x[0-9a-fA-F]+$`), not as raw
+bytes. Reading the response with `arrayBuffer()` yields 262148 bytes of ASCII and every link
+fails to open, so `fetchShareBlob` parses JSON and hex-decodes.
+
+Published links are remembered in `localStorage` under `sso.shares.v1` (newest first, 20
+entries max) and listed on the Signers step with copy and forget actions, so a publisher can
+recover a link after closing the tab. This puts the link's AES key on disk, which is
+acceptable only because the blob holds session metadata — owner addresses, labels, threshold,
+a pending transaction — and never key material. The boot line names which step it is waiting
+on, so a slow indexer reads as "Reading the shared session…" rather than appearing stuck.
+
 ## Signer kinds
 
 | Kind | How it becomes an owner | Signs by |
@@ -233,6 +245,8 @@ Exercised end to end on an anvil fork of Sepolia, through this app's own modules
   a second tab imported the owner set, stripped the fragment (`replaceState` via a shallow
   `goto`), survived a reload without re-fetching, and then deployed a real Safe at the
   predicted address. A wrong key and an unindexed blob each surface their own message.
+  The link is remembered in `localStorage`, is still listed after a reload, and its reader
+  path was exercised against a body in the indexer's real JSON-hex wire shape.
 - **Live reads.** Pinned deployments verified onchain, ETH/USD read from the Sepolia
   Chainlink feed, gas estimated on the exact calldata at click time.
 

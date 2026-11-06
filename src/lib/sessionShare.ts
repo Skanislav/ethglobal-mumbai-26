@@ -6,7 +6,7 @@
 // never puts on the wire. Whoever holds the link can read the session; the blob
 // itself (public, permanent) stays opaque without it.
 
-import { fromBlobs, toBlobs } from 'viem';
+import { fromBlobs, hexToBytes, toBlobs } from 'viem';
 import { decodeSession, encodeSession } from './session';
 import type { Session } from './session';
 
@@ -148,6 +148,12 @@ export function shareLink(origin: string, pathname: string, ref: ShareRef): stri
 /**
  * Reads the blob back from the indexer. Polling doubles as the inclusion wait:
  * blobscan only lists a blob once it is confirmed on Sepolia.
+ *
+ * The endpoint answers `200 application/json` with the blob as a quoted hex
+ * string (`"0x00…"`), not as raw bytes — the OpenAPI schema types it as
+ * `string` matching `^0x[0-9a-fA-F]+$`. Reading `arrayBuffer()` here would hand
+ * the ciphertext parser 262148 bytes of ASCII, so the body is parsed as JSON and
+ * the hex decoded.
  */
 export async function fetchShareBlob(versionedHash: `0x${string}`): Promise<Uint8Array> {
   const deadline = Date.now() + FETCH_TIMEOUT_MS;
@@ -156,7 +162,16 @@ export async function fetchShareBlob(versionedHash: `0x${string}`): Promise<Uint
     try {
       const res = await fetch(`${BLOBSCAN}/${versionedHash}/data`);
       if (res.ok) {
-        const bytes = new Uint8Array(await res.arrayBuffer());
+        let body: unknown;
+        try {
+          body = await res.json();
+        } catch {
+          throw new ShareFormatError('the indexer returned a body that is not JSON');
+        }
+        if (typeof body !== 'string' || !/^0x[0-9a-fA-F]*$/.test(body)) {
+          throw new ShareFormatError('the indexer did not return a hex blob');
+        }
+        const bytes = hexToBytes(body as `0x${string}`);
         if (bytes.length === 0) throw new ShareFormatError('the indexer returned an empty blob');
         return bytes;
       }

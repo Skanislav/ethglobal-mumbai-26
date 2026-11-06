@@ -27,6 +27,7 @@ declare module 'bun:test' {
       toBeNull(): void;
       toContain(expected: string): void;
       toHaveBeenCalled(): void;
+      toThrow(pattern?: RegExp | string | (new (...args: never[]) => unknown)): void;
     };
   };
   export const mock: { module(specifier: string, factory: () => Record<string, unknown>): void };

@@ -40,13 +40,17 @@
   import { discoveryPaths } from '../lib/signers/discovery';
   import { createPasskey } from '../lib/webauthn';
   import { decryptSessionBlob, fetchShareBlob, packSession, parseShareLink, shareLink } from '../lib/sessionShare';
+  import { forgetAllShares, forgetShare, listShares, saveShare } from '../lib/shareLinks';
+  import type { StoredShare } from '../lib/shareLinks';
 
   const STEPS = ['Start', 'Signers', 'Threshold', 'Deploy', 'Verify'] as const;
 
   let step = $state(0);
   let bootError = $state('');
   let booting = $state(true);
+  let bootStatus = $state('Checking the pinned Safe deployments on Sepolia…');
   let globalError = $state('');
+  let shares = $state<StoredShare[]>([]);
 
   const thresholdOk = $derived(
     session.current.signers.length > 0 &&
@@ -61,6 +65,9 @@
     void (async () => {
       let imported = false;
       if (share) {
+        // Reading a blob can poll for a minute while the indexer catches up; the
+        // boot line has to say that, or the wait looks like a hang in the Safe check.
+        bootStatus = 'Reading the shared session from its Sepolia blob…';
         try {
           const bytes = await fetchShareBlob(share.versionedHash);
           setSession(normalizeSignerAvailability(await decryptSessionBlob(bytes, share.keyB64)));
@@ -72,12 +79,14 @@
         } catch (err) {
           globalError =
             err instanceof Error && err.name === 'BlobNotIndexed'
-              ? 'Blob not indexed yet — reopen the link in a minute.'
+              ? 'No blob found for that link. It is either not mined yet or the link’s hash is wrong — check the link and reopen it in a minute.'
               : humanError(err);
         }
+        bootStatus = 'Checking the pinned Safe deployments on Sepolia…';
       }
       // A failed import leaves whatever was stored alone; a successful one replaced it.
       if (!imported) loadFromStorage();
+      shares = listShares();
       // A salt only matters for deriving a fresh Safe; a session that already has an
       // address keeps it (newSalt would clear the address and the deployed flag).
       if (!session.current.saltNonce && !session.current.safeAddress) newSalt();
@@ -347,9 +356,29 @@
    * generated here and only ever appears in the returned fragment.
    */
   async function shareSession(): Promise<string> {
-    const { keyB64, blobHex } = await packSession(session.current);
+    const current = session.current;
+    const { keyB64, blobHex } = await packSession(current);
     const { versionedHash } = await publishShareBlob(blobHex);
-    return shareLink(location.origin, location.pathname, { keyB64, versionedHash });
+    const url = shareLink(location.origin, location.pathname, { keyB64, versionedHash });
+    // Remembered so the publisher can get the link back after closing the tab. A
+    // reader's browser that republishes lands here too: its link is new and its own.
+    shares = saveShare({
+      url,
+      versionedHash,
+      createdAt: new Date().toISOString(),
+      signerCount: current.signers.length,
+      threshold: current.threshold,
+    });
+    return url;
+  }
+
+  function dropShare(versionedHash: `0x${string}`): void {
+    shares = forgetShare(versionedHash);
+  }
+
+  function dropAllShares(): void {
+    forgetAllShares();
+    shares = [];
   }
 </script>
 
@@ -363,7 +392,10 @@
   </header>
 
   {#if booting}
-    <StatusLine status="busy" message="Checking the pinned Safe deployments on Sepolia…" />
+    <StatusLine status="busy" message={bootStatus} />
+    {#if globalError}
+      <StatusLine status="error" message={globalError} />
+    {/if}
   {:else if bootError}
     <StatusLine status="error" message={bootError} />
   {:else}
@@ -396,6 +428,9 @@
         onDeviceScan={onDeviceScan}
         onRename={rename}
         onShare={shareSession}
+        {shares}
+        onForgetShare={dropShare}
+        onForgetAllShares={dropAllShares}
       />
       <div class="nav">
         <button onclick={() => go(0)}>Back</button>

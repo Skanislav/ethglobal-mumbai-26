@@ -4,6 +4,7 @@ import {
   ShareFormatError,
   WrongShareKey,
   decryptSessionBlob,
+  fetchShareBlob,
   packSession,
   parseShareLink,
   shareLink,
@@ -89,5 +90,34 @@ describe('session share blob', () => {
     const payload = Uint8Array.from({ length: 200 }, (_, i) => (i * 37) % 251);
     const [blob] = toBlobs({ data: payload, to: 'hex' });
     expect(fromBlobs({ blobs: [blob], to: 'bytes' })).toEqual(payload);
+  });
+
+  it('decodes the indexer body, which is JSON string hex and not raw bytes', async () => {
+    // blobscan answers 200 application/json with `"0x…"`. Reading that body as
+    // bytes yields 262148 bytes of ASCII and every share link fails to open, so
+    // this pins the wire shape rather than merely "a fetch happened".
+    const original = globalThis.fetch;
+    const respond = (body: string, status = 200): void => {
+      globalThis.fetch = (() =>
+        Promise.resolve(
+          new Response(body, { status, headers: { 'content-type': 'application/json' } }),
+        )) as unknown as typeof fetch;
+    };
+
+    try {
+      const { blobHex } = await packSession(shareable());
+      respond(JSON.stringify(blobHex));
+      const bytes = await fetchShareBlob(`0x01${'ab'.repeat(31)}`);
+      expect(bytes.length).toBe(131_072);
+      // Each field element is a zero byte followed by 31 payload bytes, so the
+      // magic starts at index 1, not 0.
+      expect([...bytes.slice(1, 5)]).toEqual([0x73, 0x73, 0x6f, 0x31]);
+
+      // A body that is not a hex string is a format error, not a silent 262148 bytes.
+      respond('not a blob');
+      await expect(fetchShareBlob(`0x01${'ab'.repeat(31)}`)).rejects.toBeInstanceOf(ShareFormatError);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

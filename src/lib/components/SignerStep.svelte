@@ -13,6 +13,7 @@
   import { privateReads, privateReadsEnabled } from '../privateReads.svelte';
   import { estimateBlobPublishCost } from '../costs';
   import type { CostContext } from '../costs';
+  import type { StoredShare } from '../shareLinks';
   import { formatEth, formatUsd } from '../format';
 
   let {
@@ -24,6 +25,9 @@
     onDeviceScan,
     onRename,
     onShare,
+    shares = [],
+    onForgetShare,
+    onForgetAllShares,
   }: {
     signers?: SignerRecord[];
     onAdd: (record: SignerRecord) => void;
@@ -33,6 +37,9 @@
     onDeviceAddress: (kind: 'ledger' | 'trezor', path: string) => Promise<SignerRecord>;
     onDeviceScan: (kind: 'ledger' | 'trezor') => Promise<{ path: string; address: `0x${string}` }[]>;
     onShare?: () => Promise<string>;
+    shares?: StoredShare[];
+    onForgetShare?: (versionedHash: `0x${string}`) => void;
+    onForgetAllShares?: () => void;
   } = $props();
 
   let busy = $state<string | null>(null);
@@ -208,11 +215,15 @@
 
   async function copyShareLink(): Promise<void> {
     if (!shareUrl) return;
+    await copyText(shareUrl);
+  }
+
+  async function copyText(text: string): Promise<void> {
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(text);
       failure = null;
     } catch {
-      // The link stays in the input: selecting and copying by hand still works.
+      // The link stays visible: selecting and copying by hand still works.
       failure = { kind: 'Share', message: 'Copy blocked — select the link and copy it manually.' };
     }
   }
@@ -394,6 +405,33 @@
             {/if}
           {/if}
         {/if}
+
+        {#if shares.length > 0}
+          <h4>Links from this browser ({shares.length})</h4>
+          <ul class="share-list">
+            {#each shares as entry (entry.versionedHash)}
+              <li>
+                <div class="share-meta">
+                  <span>{new Date(entry.createdAt).toLocaleString()}</span>
+                  <span>{entry.signerCount} signer{entry.signerCount === 1 ? '' : 's'}, {entry.threshold} of {entry.signerCount}</span>
+                </div>
+                <input
+                  type="text"
+                  class="share-link"
+                  readonly
+                  value={entry.url}
+                  aria-label="Saved share link"
+                  onfocus={(event) => event.currentTarget.select()}
+                />
+                <div class="row">
+                  <button class="link" onclick={() => copyText(entry.url)}>Copy</button>
+                  <button class="link" onclick={() => onForgetShare?.(entry.versionedHash)}>Forget</button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+          <button class="link" onclick={() => onForgetAllShares?.()}>Forget all links</button>
+        {/if}
       </div>
     {/if}
     <p class="hint">
@@ -557,5 +595,30 @@
     border: 1px solid #c9c9c9;
     border-radius: 6px;
     width: 100%;
+    box-sizing: border-box;
+  }
+  .share h4 {
+    margin: 0.25rem 0 0;
+    font-size: 0.8125rem;
+    color: #444;
+  }
+  .share-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.6rem;
+  }
+  .share-list li {
+    display: grid;
+    gap: 0.25rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid #ececec;
+  }
+  .share-meta {
+    display: flex;
+    gap: 0.75rem;
+    font-size: 0.75rem;
+    color: #666;
   }
 </style>
