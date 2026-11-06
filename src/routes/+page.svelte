@@ -34,7 +34,8 @@
     waitForReceipt,
   } from '../lib/safe';
   import { connectInjected } from '../lib/signers/hotWallet';
-  import { readLedgerAddress, readTrezorAddress } from '../lib/signers/hardware';
+  import { readLedgerAddress, readTrezorAddress, scanLedgerPaths, scanTrezorPaths } from '../lib/signers/hardware';
+  import { discoveryPaths } from '../lib/signers/discovery';
   import { createPasskey } from '../lib/webauthn';
 
   const STEPS = ['Start', 'Signers', 'Threshold', 'Deploy', 'Verify'] as const;
@@ -186,6 +187,15 @@
       return { kind: 'ledger', address: await readLedgerAddress(path), label: 'Ledger', canSign: true, path };
     }
     return { kind: 'trezor', address: await readTrezorAddress(path), label: 'Trezor', canSign: true, path };
+  }
+
+  /**
+   * One device session per scan: both transports hold the device open, so opening
+   * it per account would prompt the user once per row.
+   */
+  async function onDeviceScan(kind: 'ledger' | 'trezor'): Promise<{ path: string; address: `0x${string}` }[]> {
+    const paths = discoveryPaths();
+    return kind === 'ledger' ? scanLedgerPaths(paths) : scanTrezorPaths(paths);
   }
 
   /** Calldata preview and the call the payer broadcasts. Same object, one source. */
@@ -343,6 +353,7 @@
         onRemove={remove}
         onCreatePasskey={onCreatePasskey}
         onDeviceAddress={onDeviceAddress}
+        onDeviceScan={onDeviceScan}
         onRename={rename}
       />
       <div class="nav">

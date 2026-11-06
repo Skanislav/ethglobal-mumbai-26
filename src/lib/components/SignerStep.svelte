@@ -1,12 +1,14 @@
 <script lang="ts">
   import StatusLine from './StatusLine.svelte';
+  import AccountPicker from './AccountPicker.svelte';
   import { getAddress } from 'viem';
   import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
   import { forgetAllEphemeralKeys, storeEphemeralKey } from '../ephemeral';
   import { connectInjected } from '../signers/hotWallet';
   import { shortAddress } from '../format';
-  import { DEFAULT_HD_PATH } from '../signer-types';
   import type { SignerRecord } from '../signer-types';
+  import { describeAccounts, discoveryPaths } from '../signers/discovery';
+  import type { DiscoveredAccount } from '../signers/discovery';
   import { privateReads, privateReadsEnabled } from '../privateReads.svelte';
 
   let {
@@ -15,6 +17,7 @@
     onRemove,
     onCreatePasskey,
     onDeviceAddress,
+    onDeviceScan,
     onRename,
   }: {
     signers?: SignerRecord[];
@@ -23,14 +26,17 @@
     onRename: (address: `0x${string}`, label: string) => void;
     onCreatePasskey: (label: string) => Promise<SignerRecord>;
     onDeviceAddress: (kind: 'ledger' | 'trezor', path: string) => Promise<SignerRecord>;
+    onDeviceScan: (kind: 'ledger' | 'trezor') => Promise<{ path: string; address: `0x${string}` }[]>;
   } = $props();
 
   let busy = $state<string | null>(null);
   let failure = $state<{ kind: string; message: string } | null>(null);
   let haloAddress = $state('');
   let passkeyName = $state('');
-  let ledgerPath = $state(DEFAULT_HD_PATH);
-  let trezorPath = $state(DEFAULT_HD_PATH);
+  // Discovered accounts per device, kept after the scan so the list stays visible
+  // while the user decides. `null` = never scanned in this session.
+  let ledgerAccounts = $state<DiscoveredAccount[] | null>(null);
+  let trezorAccounts = $state<DiscoveredAccount[] | null>(null);
 
   /** A friendly default so the field is optional, but two passkeys stay distinguishable. */
   function defaultPasskeyName(): string {
@@ -100,25 +106,42 @@
     }
   }
 
-  async function addLedger(): Promise<void> {
-    busy = 'ledger';
+  /**
+   * Reads the accounts on the device, then balances and owner flags. The device is
+   * opened once per scan (the transports hold a session), so this is one prompt
+   * rather than one per account.
+   */
+  async function scan(kind: 'ledger' | 'trezor'): Promise<void> {
+    busy = kind;
     failure = null;
     try {
-      onAdd(await onDeviceAddress('ledger', ledgerPath));
+      const raw = await onDeviceScan(kind);
+      const described = await describeAccounts(raw, signers);
+      if (kind === 'ledger') ledgerAccounts = described;
+      else trezorAccounts = described;
     } catch (err) {
-      failure = { kind: 'Ledger', message: err instanceof Error ? err.message : String(err) };
+      const message = err instanceof Error ? err.message : String(err);
+      failure = { kind: kind === 'ledger' ? 'Ledger' : 'Trezor', message };
+      if (kind === 'ledger') ledgerAccounts = null;
+      else trezorAccounts = null;
     } finally {
       busy = null;
     }
   }
 
-  async function addTrezor(): Promise<void> {
-    busy = 'trezor';
+  /**
+   * Adds the account at `path` — from the scanned list or a hand-typed path, which
+   * differ only in where the path came from. The path is stored on the record so
+   * signing later reopens the same account instead of guessing.
+   */
+  async function addDevice(kind: 'ledger' | 'trezor', path: string): Promise<void> {
+    busy = kind;
     failure = null;
     try {
-      onAdd(await onDeviceAddress('trezor', trezorPath));
+      onAdd(await onDeviceAddress(kind, path));
     } catch (err) {
-      failure = { kind: 'Trezor', message: err instanceof Error ? err.message : String(err) };
+      const message = err instanceof Error ? err.message : String(err);
+      failure = { kind: kind === 'ledger' ? 'Ledger' : 'Trezor', message };
     } finally {
       busy = null;
     }
@@ -201,21 +224,39 @@
 
     <li class="tile">
       <h3>Ledger</h3>
-      <p class="why">USB HID connection to the Ethereum app.</p>
-      <input type="text" class="path" bind:value={ledgerPath} aria-label="Ledger derivation path" />
-      <button onclick={addLedger} disabled={!hasHid || busy === 'ledger'}>
-        {busy === 'ledger' ? 'Waiting for the device…' : 'Connect Ledger'}
+      <p class="why">USB HID connection to the Ethereum app. Lists the accounts on the device.</p>
+      <button onclick={() => scan('ledger')} disabled={!hasHid || busy === 'ledger'}>
+        {busy === 'ledger' ? 'Reading the device…' : ledgerAccounts ? 'Scan Ledger again' : 'Find accounts on Ledger'}
       </button>
       {#if !hasHid}<span class="reason">WebHID is unavailable in this browser (Firefox blocks it).</span>{/if}
+      {#if ledgerAccounts}
+        <AccountPicker
+          kind="ledger"
+          accounts={ledgerAccounts}
+          busy={busy === 'ledger'}
+          onPick={(account) => addDevice('ledger', account.path)}
+          onRescan={() => scan('ledger')}
+          onManual={(path) => addDevice('ledger', path)}
+        />
+      {/if}
     </li>
 
     <li class="tile">
       <h3>Trezor</h3>
       <p class="why">Signs through the Trezor Suite popup — works without WebHID.</p>
-      <input type="text" class="path" bind:value={trezorPath} aria-label="Trezor derivation path" />
-      <button onclick={addTrezor} disabled={busy === 'trezor'}>
-        {busy === 'trezor' ? 'Waiting for the popup…' : 'Connect Trezor'}
+      <button onclick={() => scan('trezor')} disabled={busy === 'trezor'}>
+        {busy === 'trezor' ? 'Waiting for the device…' : trezorAccounts ? 'Scan Trezor again' : 'Find accounts on Trezor'}
       </button>
+      {#if trezorAccounts}
+        <AccountPicker
+          kind="trezor"
+          accounts={trezorAccounts}
+          busy={busy === 'trezor'}
+          onPick={(account) => addDevice('trezor', account.path)}
+          onRescan={() => scan('trezor')}
+          onManual={(path) => addDevice('trezor', path)}
+        />
+      {/if}
     </li>
   </ul>
 
@@ -306,10 +347,6 @@
   .row {
     display: flex;
     gap: 0.4rem;
-  }
-  .path {
-    font-family: ui-monospace, monospace;
-    font-size: 0.8125rem;
   }
   .name {
     font: inherit;

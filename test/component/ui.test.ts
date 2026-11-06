@@ -43,6 +43,7 @@ const NOOP_SIGNER_HANDLERS = {
     kind === 'ledger'
       ? { kind: 'ledger', address: '0x0000000000000000000000000000000000000001', label: 'Ledger', canSign: true, path: "44'/60'/0'/0/0" }
       : { kind: 'trezor', address: '0x0000000000000000000000000000000000000001', label: 'Trezor', canSign: true, path: "44'/60'/0'/0/0" },
+  onDeviceScan: async (): Promise<{ path: string; address: `0x${string}` }[]> => [],
 };
 
 describe('ModeStep', () => {
@@ -108,6 +109,53 @@ describe('SignerStep', () => {
     const trezor = Array.from(target.querySelectorAll('li.tile')).find((t) => t.textContent?.includes('Trezor'))!;
     expect(trezor.querySelector('button')!.disabled).toBe(false);
     expect(trezor.querySelector('.reason')).toBeNull();
+    // No account list until the user actually scans the device.
+    expect(trezor.textContent).not.toContain('Account 0');
+    destroy();
+  });
+
+  it('lists discovered device accounts instead of guessing one path', async () => {
+    const accounts = [
+      { path: "44'/60'/0'/0/0", account: 0, address: '0x1111111111111111111111111111111111111111' },
+      { path: "44'/60'/1'/0/0", account: 1, address: '0x2222222222222222222222222222222222222222' },
+    ];
+    // Balances are a normal read, so they go through the routing seam; the second
+    // account's read fails, which must show as "balance unknown", not disappear.
+    setReadRouter({
+      request: async ({ params }) => {
+        const address = Array.isArray(params) ? String(params[0]) : '';
+        if (address.toLowerCase() === accounts[1].address) throw new Error('gateway down');
+        return '0x0';
+      },
+    });
+    const onDeviceAddress = vi.fn(async (kind: 'ledger' | 'trezor', path: string): Promise<SignerRecord> => ({
+      kind,
+      address: '0x1111111111111111111111111111111111111111',
+      label: 'Trezor',
+      canSign: true,
+      path,
+    }));
+    const { promise, resolve } = Promise.withResolvers<void>();
+    // The scan resolves only after balances are read, so this is the signal to await.
+    const onDeviceScan = vi.fn(() => {
+      resolve();
+      return Promise.resolve(accounts);
+    });
+    const { target, destroy } = mountAt(SignerStep, {
+      signers: [],
+      ...NOOP_SIGNER_HANDLERS,
+      onDeviceScan,
+      onDeviceAddress,
+    });
+    await tick();
+    const trezor = Array.from(target.querySelectorAll('li.tile')).find((t) => t.textContent?.includes('Trezor'))!;
+    (trezor.querySelector('button') as HTMLButtonElement).click();
+    await promise;
+    await vi.waitFor(() => expect(trezor.textContent).toContain('Account 1'));
+    expect(onDeviceScan).toHaveBeenCalledWith('trezor');
+    expect(trezor.textContent).toContain("m/44'/60'/1'/0/0");
+    expect(trezor.textContent).toContain('no Sepolia ETH');
+    expect(trezor.textContent).toContain('balance unknown');
     destroy();
   });
 
