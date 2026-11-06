@@ -7,6 +7,8 @@
   import { encodeSession } from '../session';
   import type { Session } from '../session';
   import { signRecord } from '../signers';
+  import { haloStatusText } from '../signers/halo';
+  import type { HaloStatus } from '../signers/halo';
   import { safeTxHashParts } from '../safeTxDigest';
   import { sendFromWallet, waitForReceipt } from '../safe';
   import { connectInjected } from '../signers/hotWallet';
@@ -88,7 +90,7 @@
       // sign; a mismatch aborts before a device ever prompts.
       safeTxHashParts(ctx);
       const signature = await signRecord(record, ctx, {
-        onHaloStatus: (status) => (signStatus = { kind: 'busy', message: `Chip: ${status}` }),
+        onHaloStatus: (status) => (signStatus = { kind: 'busy', message: haloStatusText(status as HaloStatus) }),
       });
       onSignerSigned(record.address, signature.data as `0x${string}`, signature.isContractSignature);
       signStatus = { kind: 'ok', message: `${record.label} signed.` };

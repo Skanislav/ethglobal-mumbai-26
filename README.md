@@ -33,7 +33,7 @@ exported session, a URL, or any request.
 | Browser wallet | its EOA address | EIP-1193 `eth_signTypedData_v4` through protocol-kit |
 | Demo key | an EOA generated in this tab | in-tab key from `sessionStorage` |
 | Passkey | `SafeWebAuthnSignerFactory.getSigner(x, y, verifiers)` proxy address | WebAuthn assertion encoded as a contract signature |
-| HaLo NFC chip | the chip's uncompressed secp256k1 key → EOA | NFC tap over the raw SafeTx digest |
+| HaLo NFC chip | the chip's uncompressed secp256k1 key → EOA, read by tapping the chip to the phone | NFC tap over the raw SafeTx digest |
 | Ledger | EOA at the HD path | `signEIP712HashedMessage` over WebHID |
 | Trezor | EOA at the HD path | `ethereumSignTypedData` via the Suite popup |
 

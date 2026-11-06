@@ -5,6 +5,7 @@
   import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
   import { forgetAllEphemeralKeys, storeEphemeralKey } from '../ephemeral';
   import { connectInjected } from '../signers/hotWallet';
+  import { describeHaloFailure, haloAvailable, haloSignerAddress, haloStatusText, readHaloPublicKey } from '../signers/halo';
   import { shortAddress } from '../format';
   import type { SignerRecord } from '../signer-types';
   import { describeAccounts, discoveryPaths } from '../signers/discovery';
@@ -32,6 +33,7 @@
   let busy = $state<string | null>(null);
   let failure = $state<{ kind: string; message: string } | null>(null);
   let haloAddress = $state('');
+  let haloStatus = $state<string | null>(null);
   let passkeyName = $state('');
   // Discovered accounts per device, kept after the scan so the list stays visible
   // while the user decides. `null` = never scanned in this session.
@@ -47,11 +49,7 @@
   const hasInjected = $derived(typeof window !== 'undefined' && Boolean(window.ethereum));
   const hasWebAuthn = $derived(typeof navigator !== 'undefined' && Boolean(navigator.credentials?.create));
   // HaLo needs Web NFC or the ARX bridge; neither exists in an ordinary desktop browser.
-  const hasNfc = $derived(
-    typeof window !== 'undefined' &&
-      (typeof (window as unknown as Record<string, unknown>).NDEFReader !== 'undefined' ||
-        typeof (window as unknown as Record<string, unknown>).HaloBridge !== 'undefined'),
-  );
+  const hasNfc = $derived(haloAvailable());
   const hasHid = $derived(typeof navigator !== 'undefined' && Boolean((navigator as { hid?: unknown }).hid));
 
   async function addDemo(): Promise<void> {
@@ -147,6 +145,28 @@
     }
   }
 
+  /**
+   * Reads the chip over NFC. The tap returns the chip's public key, which is what
+   * makes the owner *signable* later — an address pasted by hand cannot sign, because
+   * the signature needs the key to recover `v`.
+   */
+  async function scanHalo(): Promise<void> {
+    busy = 'halo';
+    failure = null;
+    haloStatus = 'Hold the chip against the back of your phone…';
+    try {
+      const publicKey = await readHaloPublicKey((status) => (haloStatus = haloStatusText(status)));
+      const address = await haloSignerAddress(publicKey);
+      onAdd({ kind: 'halo', address, label: 'HaLo chip', canSign: true, publicKey });
+      haloStatus = null;
+    } catch (err) {
+      failure = { kind: 'HaLo', message: describeHaloFailure(err) };
+      haloStatus = null;
+    } finally {
+      busy = null;
+    }
+  }
+
   function addHaloAddress(): void {
     failure = null;
     const value = haloAddress.trim();
@@ -208,17 +228,22 @@
 
     <li class="tile">
       <h3>HaLo NFC chip</h3>
-      <p class="why">An ARX chip's secp256k1 key, tapped over NFC.</p>
+      <p class="why">An ARX chip's secp256k1 key, read by tapping the chip to your phone.</p>
+      <button onclick={scanHalo} disabled={!hasNfc || busy === 'halo'}>
+        {busy === 'halo' ? 'Waiting for the tap…' : 'Scan chip'}
+      </button>
+      {#if !hasNfc}
+        <span class="reason">No Web NFC in this browser (desktop browsers do not ship it) — paste the chip address instead.</span>
+      {/if}
+      {#if haloStatus}
+        <StatusLine status="busy" message={haloStatus} />
+      {/if}
       <div class="row">
-        <input type="text" placeholder="0x… chip address" bind:value={haloAddress} />
+        <input type="text" placeholder="0x… chip address" bind:value={haloAddress} aria-label="HaLo chip address" />
         <button onclick={addHaloAddress}>Use address</button>
       </div>
       <span class="reason">
-        {#if hasNfc}
-          Address-only entry; tap the chip later when signing.
-        {:else}
-          No NFC in this browser — paste the chip address to include it as an owner.
-        {/if}
+        A pasted address cannot sign here — the chip has to be tapped to register as a signable owner.
       </span>
     </li>
 

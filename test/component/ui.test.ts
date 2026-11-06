@@ -13,6 +13,22 @@ import { session, setSession } from '../../src/lib/session.svelte';
 import { decodeSession, newSession } from '../../src/lib/session';
 import type { SignerRecord } from '../../src/lib/signer-types';
 
+// The NFC driver talks to real hardware, so the tap is stubbed at the module
+// boundary; everything above it (status text, owner record shape) stays real code.
+const haloStub = vi.hoisted(() => ({
+  available: false,
+  publicKey: '0x04a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f6' as `0x${string}`,
+  address: '0x3333333333333333333333333333333333333333' as `0x${string}`,
+}));
+
+vi.mock('../../src/lib/signers/halo', () => ({
+  haloAvailable: () => haloStub.available,
+  readHaloPublicKey: async () => haloStub.publicKey,
+  haloSignerAddress: async () => haloStub.address,
+  haloStatusText: (status: string) => `status:${status}`,
+  describeHaloFailure: (err: unknown) => (err instanceof Error ? err.message : String(err)),
+}));
+
 function mountAt(component: Parameters<typeof mount>[0], props: Record<string, unknown> = {}) {
   const target = document.createElement('div');
   document.body.appendChild(target);
@@ -168,6 +184,39 @@ describe('SignerStep', () => {
     });
     await tick();
     expect(target.textContent).toContain('TESTNET ONLY');
+    destroy();
+  });
+
+  it('registers a tapped chip as a signable owner with its public key', async () => {
+    haloStub.available = true;
+    const onAdd = vi.fn();
+    const { target, destroy } = mountAt(SignerStep, { signers: [], ...NOOP_SIGNER_HANDLERS, onAdd });
+    await tick();
+    const halo = Array.from(target.querySelectorAll('li.tile')).find((t) => t.textContent?.includes('HaLo'))!;
+    const scanButton = Array.from(halo.querySelectorAll('button')).find((b) => b.textContent?.includes('Scan chip'))!;
+    expect(scanButton.disabled).toBe(false);
+    scanButton.click();
+    await vi.waitFor(() => expect(onAdd).toHaveBeenCalled());
+    // The tap yields the key, so the owner can actually sign; a pasted address cannot.
+    expect(onAdd).toHaveBeenCalledWith({
+      kind: 'halo',
+      address: haloStub.address,
+      label: 'HaLo chip',
+      canSign: true,
+      publicKey: haloStub.publicKey,
+    });
+    haloStub.available = false;
+    destroy();
+  });
+
+  it('explains that a pasted chip address cannot sign here', async () => {
+    const { target, destroy } = mountAt(SignerStep, { signers: [], ...NOOP_SIGNER_HANDLERS });
+    await tick();
+    const halo = Array.from(target.querySelectorAll('li.tile')).find((t) => t.textContent?.includes('HaLo'))!;
+    // Desktop browsers ship no Web NFC, so the scan button is gated and the reason says why.
+    expect(halo.querySelector('button')!.disabled).toBe(true);
+    expect(halo.textContent).toContain('No Web NFC in this browser');
+    expect(halo.textContent).toContain('cannot sign here');
     destroy();
   });
 

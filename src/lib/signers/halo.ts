@@ -10,6 +10,26 @@ import type { SigningContext } from '../signer-types';
 
 export type HaloStatus = 'init' | 'again' | 'retry' | 'scanned';
 
+/**
+ * The chip driver reports four states while a tap is in flight. `retry` and `again`
+ * mean the tag moved or was read only partially, which is the common case on a phone
+ * — saying "hold the chip still" is more useful than echoing the raw word.
+ */
+export function haloStatusText(status: HaloStatus): string {
+  switch (status) {
+    case 'init':
+      return 'Hold the chip against the back of your phone…';
+    case 'again':
+      return 'Lost the chip — hold it against the phone again.';
+    case 'retry':
+      return 'Read interrupted — keep the chip still and hold it to the phone.';
+    case 'scanned':
+      return 'Chip read.';
+    default:
+      return String(status);
+  }
+}
+
 type HaloPkeys = { publicKeys?: string[] };
 
 /** NFC is only reachable from a secure context with Web NFC or a bridge. */
