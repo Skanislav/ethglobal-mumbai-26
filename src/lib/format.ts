@@ -84,6 +84,12 @@ export function humanError(err: unknown): string {
       return `That blob is not a readable session: ${message.replace(/^ShareFormatError: /, '')}.`;
     case 'BlobNotIndexed':
       return 'The blob is not indexed yet. It is onchain, so reopen the link in a minute.';
+    case 'BlobUnknown':
+      return 'That link names a blob that Sepolia does not have, so it cannot be opened. The publish transaction probably did not carry a blob — check the transaction it came from. Publish the session again to get a working link.';
+    case 'BlobUnavailable':
+      return 'That blob is on Sepolia but the indexer has no copy of its bytes right now. Reopen the link in a minute.';
+    case 'BlobUnreachable':
+      return 'This browser could not reach the blob indexer (api.sepolia.blobscan.com), so the shared session cannot be read. Check the network, or any extension blocking that host, and reload.';
     case 'BlobPublishRejected':
       return `The blob was not published: ${message.replace(/^BlobPublishRejected: /, '')}.`;
     case 'DuplicateOwner':

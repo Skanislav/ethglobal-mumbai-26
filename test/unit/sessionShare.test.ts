@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import { fromBlobs, hexToBytes, toBlobs } from 'viem';
 import {
+  BlobUnavailable,
+  BlobUnknown,
   ShareFormatError,
   WrongShareKey,
   decryptSessionBlob,
@@ -116,6 +118,37 @@ describe('session share blob', () => {
       // A body that is not a hex string is a format error, not a silent 262148 bytes.
       respond('not a blob');
       await expect(fetchShareBlob(`0x01${'ab'.repeat(31)}`)).rejects.toBeInstanceOf(ShareFormatError);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it('tells a hash that was never published apart from one whose bytes are missing', async () => {
+    // The /data endpoint gives the SAME 404 for both; only the metadata endpoint
+    // distinguishes them. Treating them alike makes a wrong link look like a slow
+    // indexer for a full minute.
+    const original = globalThis.fetch;
+    const notFound = (message: string) =>
+      new Response(JSON.stringify({ message, code: 'NOT_FOUND' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      });
+    const DATA_404 = notFound(
+      "No blob data storage URLs found for blob with id '0x01ab'.",
+    );
+    const route = (metaStatus: number): void => {
+      globalThis.fetch = ((input: string | URL) => {
+        const url = String(input);
+        // /blobs/{id}/data vs /blobs/{id}
+        return Promise.resolve(url.endsWith('/data') ? DATA_404.clone() : new Response(metaStatus === 200 ? '{}' : '{}', { status: metaStatus }));
+      }) as unknown as typeof fetch;
+    };
+
+    try {
+      route(404);
+      await expect(fetchShareBlob(`0x01${'ab'.repeat(31)}`)).rejects.toBeInstanceOf(BlobUnknown);
+      route(200);
+      await expect(fetchShareBlob(`0x01${'ab'.repeat(31)}`)).rejects.toBeInstanceOf(BlobUnavailable);
     } finally {
       globalThis.fetch = original;
     }

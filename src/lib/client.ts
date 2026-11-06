@@ -25,6 +25,10 @@ export type ReadClient = {
     transactionHash: Hex;
     gasUsed: bigint;
     blockNumber: bigint;
+    /** 'eip4844' for a blob transaction; every other kind carried no blob. */
+    type: string;
+    /** Present only when the transaction actually carried a blob. */
+    blobGasUsed?: bigint;
   }>;
 };
 

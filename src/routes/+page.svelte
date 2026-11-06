@@ -77,9 +77,11 @@
           await goto(`${location.pathname}${location.search}`, { replace: true, shallow: true });
           imported = true;
         } catch (err) {
+          // `humanError` now names each blob failure precisely; only the generic
+          // "still polling" timeout needs the hint about reopening the link.
           globalError =
             err instanceof Error && err.name === 'BlobNotIndexed'
-              ? 'No blob found for that link. It is either not mined yet or the link’s hash is wrong — check the link and reopen it in a minute.'
+              ? 'No blob found for that link yet. If it was published moments ago, reopen it in a minute; otherwise check the link.'
               : humanError(err);
         }
         bootStatus = 'Checking the pinned Safe deployments on Sepolia…';

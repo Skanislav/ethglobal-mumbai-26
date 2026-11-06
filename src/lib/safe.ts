@@ -312,25 +312,35 @@ export async function publishShareBlob(blobHex: `0x${string}`): Promise<SharePub
   };
   const send = (params: unknown) => conn.provider.request({ method: 'eth_sendTransaction', params: [params] });
 
+  // No fallback that drops `blobVersionedHashes` and `sidecars`. A wallet that
+  // rejects them cannot publish this blob, and retrying with `blobs` alone lets a
+  // wallet send the payload as calldata: the user pays, gets a success receipt,
+  // and the link names a blob that was never published. Failing here is the only
+  // honest outcome.
   let hash: unknown;
   try {
     hash = await send({ ...request, blobVersionedHashes: versionedHashes, sidecars });
   } catch (err) {
-    const name = err && typeof err === 'object' && 'name' in err ? String(err.name) : '';
-    const code = err && typeof err === 'object' && 'code' in err ? err.code : undefined;
-    const rejectedParams = name === 'InvalidParamsRpcError' || code === -32602 || code === 4200;
-    if (!rejectedParams) throw err;
-    // Some wallets refuse the sidecars/hashes shape and derive their own from
-    // `blobs`. Retrying keeps the publish possible; the versioned hash below is
-    // still the one this code derived, so the link stays truthful.
-    hash = await send(request).catch((inner: unknown) => {
-      throw new BlobPublishRejected(inner instanceof Error ? inner.message : String(inner));
-    });
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new BlobPublishRejected(
+      `the wallet refused the blob request (${detail}). It must support EIP-4844 type-3 transactions; a wallet that does not cannot publish a session`,
+    );
   }
   if (typeof hash !== 'string') throw new BlobPublishRejected('the wallet returned no transaction hash');
 
   const txHash = hash as Hex;
   const receipt = await waitForReceipt(txHash);
   if (receipt.status !== 'success') throw new BlobPublishRejected('the blob transaction reverted');
+  // The receipt is the only proof the blob was actually carried. A wallet that
+  // silently downgraded the request still reports a success receipt, so checking
+  // the hash alone would hand back a link to a blob nobody has.
+  if (receipt.type !== 'eip4844') {
+    throw new BlobPublishRejected(
+      `the wallet sent a ${receipt.type} transaction instead of a blob transaction, so nothing was published`,
+    );
+  }
+  if (receipt.blobGasUsed !== undefined && receipt.blobGasUsed !== 131_072n) {
+    throw new BlobPublishRejected(`the transaction carried ${receipt.blobGasUsed} blob gas, expected 131072`);
+  }
   return { txHash, versionedHash: versionedHashes[0] };
 }

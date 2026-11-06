@@ -55,6 +55,22 @@ That endpoint answers `200 application/json` with the blob as a **quoted hex str
 bytes. Reading the response with `arrayBuffer()` yields 262148 bytes of ASCII and every link
 fails to open, so `fetchShareBlob` parses JSON and hex-decodes.
 
+The data endpoint answers the *same* `404 "No blob data storage URLs found"` for a hash it has
+never seen and for one it knows but cannot serve, so it cannot distinguish them. When it 404s,
+`fetchShareBlob` probes `/blobs/{id}` once: that endpoint 404s `"No blob with versioned hash"`
+only for a hash absent from Sepolia. The two cases need different remedies — republish versus
+wait — so they raise `BlobUnknown` and `BlobUnavailable` respectively. A transport failure
+(`TypeError: Failed to fetch`: offline, DNS, CORS, a blocking extension) raises
+`BlobUnreachable` immediately instead of being retried behind a spinner for a minute.
+
+**Publishing verifies the receipt, because a wallet can downgrade the request.** A wallet that
+refused `blobVersionedHashes`/`sidecars` used to be retried with `blobs` alone; such a wallet
+can send the payload as ordinary calldata, return a success receipt, and leave the app handing
+back a link to a blob nobody published (observed live: a legacy type-0 self-send, `gasUsed`
+12000, no `blobGasUsed`). That fallback is gone — a wallet that cannot build a type-3
+transaction now fails the publish — and `publishShareBlob` re-reads the receipt and requires
+`type === 'eip4844'` with `blobGasUsed === 131072` before returning any link.
+
 Published links are remembered in `localStorage` under `sso.shares.v1` (newest first, 20
 entries max) and listed on the Signers step with copy and forget actions, so a publisher can
 recover a link after closing the tab. This puts the link's AES key on disk, which is

@@ -31,5 +31,11 @@ declare module 'bun:test' {
     };
   };
   export const mock: { module(specifier: string, factory: () => Record<string, unknown>): void };
+  export const vi: {
+    mock(specifier: string, factory: () => Record<string, unknown>): void;
+    fn(impl?: (...args: never[]) => unknown): ((...args: never[]) => unknown) & {
+      mock: { calls: unknown[][] };
+    };
+  };
   export type Fn = Fn;
 }

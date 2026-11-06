@@ -42,6 +42,34 @@ export class BlobNotIndexed extends Error {
   }
 }
 
+/**
+ * The indexer has never heard of this versioned hash. Distinct from
+ * {@link BlobNotIndexed} because the remedy differs: waiting does not help, the
+ * blob was never published to Sepolia (or the link names the wrong hash).
+ */
+export class BlobUnknown extends Error {
+  constructor(versionedHash: string) {
+    super(`BlobUnknown: no blob on Sepolia has versioned hash ${versionedHash}`);
+    this.name = 'BlobUnknown';
+  }
+}
+
+/** Indexed, but the indexer has no storage URL to serve the bytes from. */
+export class BlobUnavailable extends Error {
+  constructor(versionedHash: string) {
+    super(`BlobUnavailable: the indexer knows ${versionedHash} but has no data URL for it`);
+    this.name = 'BlobUnavailable';
+  }
+}
+
+/** The request never reached the indexer: offline, DNS, CORS, or a blocker. */
+export class BlobUnreachable extends Error {
+  constructor(detail: string) {
+    super(`BlobUnreachable: could not reach the blob indexer (${detail})`);
+    this.name = 'BlobUnreachable';
+  }
+}
+
 export type ShareBlob = {
   /** 32 random bytes, base64url — goes in the URL fragment and nowhere else. */
   keyB64: string;
@@ -146,6 +174,17 @@ export function shareLink(origin: string, pathname: string, ref: ShareRef): stri
 }
 
 /**
+ * The indexer's 404 body is `{ message, code, data }`. Only `message` is read, and
+ * only to tell its two 404 meanings apart, so this narrows instead of asserting.
+ */
+function errorMessage(body: unknown): string {
+  if (body && typeof body === 'object' && 'message' in body && typeof body.message === 'string') {
+    return body.message;
+  }
+  return '';
+}
+
+/**
  * Reads the blob back from the indexer. Polling doubles as the inclusion wait:
  * blobscan only lists a blob once it is confirmed on Sepolia.
  *
@@ -175,11 +214,33 @@ export async function fetchShareBlob(versionedHash: `0x${string}`): Promise<Uint
         if (bytes.length === 0) throw new ShareFormatError('the indexer returned an empty blob');
         return bytes;
       }
-      if (res.status !== 404) {
+      if (res.status === 404) {
+        // The data endpoint answers "No blob data storage URLs found" for BOTH a
+        // hash it has never seen and one it knows but cannot serve, so it cannot
+        // tell them apart. The metadata endpoint can: it 404s "No blob with
+        // versioned hash" only for a hash that is not on Sepolia at all. Probing
+        // it once per attempt is what makes "wait" vs "the link is wrong" honest.
+        const meta = await fetch(`${BLOBSCAN}/${versionedHash}`);
+        if (meta.status === 404) throw new BlobUnknown(versionedHash);
+        if (meta.ok) throw new BlobUnavailable(versionedHash);
+        lastError = errorMessage(await res.json().catch(() => null));
+      } else {
         throw new ShareFormatError(`the indexer rejected the read (HTTP ${res.status})`);
       }
     } catch (err) {
-      if (err instanceof ShareFormatError) throw err;
+      if (
+        err instanceof ShareFormatError ||
+        err instanceof BlobUnknown ||
+        err instanceof BlobUnavailable ||
+        err instanceof BlobUnreachable
+      ) {
+        throw err;
+      }
+      // A transport failure is not "not indexed yet": a 404 is the indexer
+      // answering, while `TypeError: Failed to fetch` means the request never
+      // reached it (CORS, DNS, offline, a privacy extension). Retrying that for a
+      // minute hides a real problem behind a spinner, so it fails immediately.
+      if (err instanceof TypeError) throw new BlobUnreachable(err.message);
       lastError = err instanceof Error ? err.message : String(err);
     }
     if (Date.now() + FETCH_INTERVAL_MS > deadline) throw new BlobNotIndexed(lastError || undefined);
