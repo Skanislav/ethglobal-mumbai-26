@@ -209,13 +209,15 @@ describe('SignerStep', () => {
     destroy();
   });
 
-  it('explains that a pasted chip address cannot sign here', async () => {
+  it('marks the chip tile unavailable and names a compatible device when Web NFC is missing', async () => {
     const { target, destroy } = mountAt(SignerStep, { signers: [], ...NOOP_SIGNER_HANDLERS });
     await tick();
     const halo = Array.from(target.querySelectorAll('li.tile')).find((t) => t.textContent?.includes('HaLo'))!;
-    // Desktop browsers ship no Web NFC, so the scan button is gated and the reason says why.
+    // Desktop browsers ship no Web NFC: the option stays visible but reads as unavailable.
+    expect(halo.classList.contains('unavailable')).toBe(true);
     expect(halo.querySelector('button')!.disabled).toBe(true);
-    expect(halo.textContent).toContain('No Web NFC in this browser');
+    expect(halo.textContent).toContain('Web NFC is not available in this browser');
+    expect(halo.textContent).toContain('Chrome on Android');
     expect(halo.textContent).toContain('cannot sign here');
     destroy();
   });

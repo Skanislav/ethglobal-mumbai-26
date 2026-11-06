@@ -171,7 +171,7 @@
     failure = null;
     const value = haloAddress.trim();
     if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
-      failure = { kind: 'HaLo', message: 'Paste the 42-character hex address from your chip.' };
+      failure = { kind: 'HaLo', message: 'Enter the 42-character hex address.' };
       return;
     }
     try {
@@ -226,20 +226,23 @@
       {#if !hasWebAuthn}<span class="reason">This browser has no WebAuthn support.</span>{/if}
     </li>
 
-    <li class="tile">
+    <li class={{ tile: true, unavailable: !hasNfc }}>
       <h3>HaLo NFC chip</h3>
       <p class="why">An ARX chip's secp256k1 key, read by tapping the chip to your phone.</p>
       <button onclick={scanHalo} disabled={!hasNfc || busy === 'halo'}>
         {busy === 'halo' ? 'Waiting for the tap…' : 'Scan chip'}
       </button>
       {#if !hasNfc}
-        <span class="reason">No Web NFC in this browser (desktop browsers do not ship it) — paste the chip address instead.</span>
+        <span class="reason unavailable-reason">
+          Web NFC is not available in this browser. Use a compatible device: Chrome on Android,
+          served over HTTPS — then tap the chip to this screen.
+        </span>
       {/if}
       {#if haloStatus}
         <StatusLine status="busy" message={haloStatus} />
       {/if}
       <div class="row">
-        <input type="text" placeholder="0x… chip address" bind:value={haloAddress} aria-label="HaLo chip address" />
+        <input type="text" placeholder="0x… address" bind:value={haloAddress} aria-label="Address" />
         <button onclick={addHaloAddress}>Use address</button>
       </div>
       <span class="reason">
@@ -359,6 +362,20 @@
   .tile h3 {
     margin: 0;
     font-size: 0.9375rem;
+  }
+  /* A capability this browser lacks: the tile stays visible so the option is
+     discoverable, but reads as unavailable rather than as a button that fails. */
+  .tile.unavailable {
+    background: #f6f6f6;
+    border-color: #e2e2e2;
+  }
+  .tile.unavailable h3,
+  .tile.unavailable .why {
+    opacity: 0.55;
+  }
+  .unavailable-reason {
+    color: #7a4b00;
+    font-weight: 500;
   }
   .why {
     margin: 0;
