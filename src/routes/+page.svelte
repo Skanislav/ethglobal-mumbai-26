@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import ModeStep from '../lib/components/ModeStep.svelte';
   import SignerStep from '../lib/components/SignerStep.svelte';
   import ThresholdStep from '../lib/components/ThresholdStep.svelte';
@@ -31,12 +32,14 @@
     proposeSafeTransaction,
     execTransactionCall,
     sendFromWallet,
+    publishShareBlob,
     waitForReceipt,
   } from '../lib/safe';
   import { connectInjected } from '../lib/signers/hotWallet';
   import { readLedgerAddress, readTrezorAddress, scanLedgerPaths, scanTrezorPaths } from '../lib/signers/hardware';
   import { discoveryPaths } from '../lib/signers/discovery';
   import { createPasskey } from '../lib/webauthn';
+  import { decryptSessionBlob, fetchShareBlob, packSession, parseShareLink, shareLink } from '../lib/sessionShare';
 
   const STEPS = ['Start', 'Signers', 'Threshold', 'Deploy', 'Verify'] as const;
 
@@ -52,16 +55,43 @@
   );
 
   onMount(() => {
-    loadFromStorage();
-    if (!session.current.saltNonce) newSalt();
-    // Resume exactly where the user was, as long as that step is still reachable —
-    // a session's steps are unlocked by its owner set, so a stale step index must not
-    // skip ahead of data that no longer exists.
-    const saved = loadStep();
-    if (saved >= 0 && saved <= reachableStep()) step = saved;
-    else if (session.current.safeAddress) step = session.current.deployed ? 4 : 3;
-    else if (session.current.signers.length > 0) step = 2;
+    // A share link is read before anything local is loaded: the link is the user's
+    // explicit instruction, and a stale stored session must not win over it.
+    const share = parseShareLink(location.href);
     void (async () => {
+      let imported = false;
+      if (share) {
+        try {
+          const bytes = await fetchShareBlob(share.versionedHash);
+          setSession(normalizeSignerAvailability(await decryptSessionBlob(bytes, share.keyB64)));
+          // Strip the fragment so a reload resumes the stored session instead of
+          // re-fetching a blob that is already in localStorage. A shallow goto is
+          // the router-aware equivalent of `history.replaceState`.
+          await goto(`${location.pathname}${location.search}`, { replace: true, shallow: true });
+          imported = true;
+        } catch (err) {
+          globalError =
+            err instanceof Error && err.name === 'BlobNotIndexed'
+              ? 'Blob not indexed yet — reopen the link in a minute.'
+              : humanError(err);
+        }
+      }
+      // A failed import leaves whatever was stored alone; a successful one replaced it.
+      if (!imported) loadFromStorage();
+      // A salt only matters for deriving a fresh Safe; a session that already has an
+      // address keeps it (newSalt would clear the address and the deployed flag).
+      if (!session.current.saltNonce && !session.current.safeAddress) newSalt();
+      if (imported) {
+        go(reachableStep());
+      } else {
+        // Resume exactly where the user was, as long as that step is still reachable —
+        // a session's steps are unlocked by its owner set, so a stale step index must
+        // not skip ahead of data that no longer exists.
+        const saved = loadStep();
+        if (saved >= 0 && saved <= reachableStep()) step = saved;
+        else if (session.current.safeAddress) step = session.current.deployed ? 4 : 3;
+        else if (session.current.signers.length > 0) step = 2;
+      }
       try {
         await verifyDeployments(sepoliaPublicClient);
       } catch (err) {
@@ -311,6 +341,16 @@
         globalError = humanError(err);
       });
   }
+
+  /**
+   * Publishes the session to a blob and returns the link that opens it. The key is
+   * generated here and only ever appears in the returned fragment.
+   */
+  async function shareSession(): Promise<string> {
+    const { keyB64, blobHex } = await packSession(session.current);
+    const { versionedHash } = await publishShareBlob(blobHex);
+    return shareLink(location.origin, location.pathname, { keyB64, versionedHash });
+  }
 </script>
 
 <main>
@@ -355,6 +395,7 @@
         onDeviceAddress={onDeviceAddress}
         onDeviceScan={onDeviceScan}
         onRename={rename}
+        onShare={shareSession}
       />
       <div class="nav">
         <button onclick={() => go(0)}>Back</button>

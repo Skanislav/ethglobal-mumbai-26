@@ -78,6 +78,14 @@ export function humanError(err: unknown): string {
       return 'That Safe address already has code. Start a new session to derive a fresh salt.';
     case 'InvalidSession':
       return `That session link is not readable: ${message.replace(/^InvalidSession: /, '')}.`;
+    case 'WrongShareKey':
+      return 'This link’s key does not open that blob. Ask the sender for the full link — the part after the second slash is the key.';
+    case 'ShareFormatError':
+      return `That blob is not a readable session: ${message.replace(/^ShareFormatError: /, '')}.`;
+    case 'BlobNotIndexed':
+      return 'The blob is not indexed yet. It is onchain, so reopen the link in a minute.';
+    case 'BlobPublishRejected':
+      return `The blob was not published: ${message.replace(/^BlobPublishRejected: /, '')}.`;
     case 'DuplicateOwner':
       return 'That address is already in the signer set.';
     case 'DeploymentNotOnChain':

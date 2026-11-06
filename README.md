@@ -26,6 +26,30 @@ key is Sepolia-only and holds nothing, the UI keeps a permanent TESTNET-ONLY bad
 is in the owner set, and "Forget demo keys" removes them. A key is never written into an
 exported session, a URL, or any request.
 
+## Sharing a session with a second person
+
+The Signers step can publish the current session to a temporary Sepolia EIP-4844 blob and
+hand back a link. The other person opens it, sees the owner set, adds their own signers, and
+deploys — the session continues locally on their machine.
+
+The link is `{origin}{pathname}#/share/{key}/{versionedHash}`. The 32-byte AES-GCM key lives
+in the fragment, which a browser never puts on the wire, so the blob itself (public and
+permanent onchain) stays opaque without it. The blob payload is a versioned envelope
+(`{v: 1, session}`) around the same `encodeSession` string the app stores in
+`localStorage`, so a shared session and a stored one decode through one codec.
+
+Sharing is one hop: the reader's local copy *is* the full session, so sharing again from
+their browser publishes a fresh blob under a fresh key. There is no chaining, no passphrase,
+and no multi-reader history.
+
+Publishing is a type-3 transaction from the user's own wallet. The app derives the
+commitment, proof, versioned hash, and sidecars itself and passes them explicitly rather
+than letting viem build the request: viem's JSON-RPC-account path drops `blobVersionedHashes`
+and `sidecars` from `eth_sendTransaction`, which would publish a blob the link's hash does
+not name. Reading the blob back goes through `https://api.sepolia.blobscan.com`, polling
+until the indexer lists it (the poll doubles as the inclusion wait); a link whose blob is
+not indexed yet says so instead of failing silently.
+
 ## Signer kinds
 
 | Kind | How it becomes an owner | Signs by |
@@ -162,17 +186,24 @@ resulting CID.
 
 ```sh
 anvil --fork-url https://ethereum-sepolia-rpc.publicnode.com --port 8545 \
-      --gas-price 1000000000 --base-fee 1000000000
+      --hardfork cancun --gas-price 1000000000 --base-fee 1000000000
+cast rpc anvil_setIntervalMining 1 --rpc-url http://127.0.0.1:8545
 RPC_URL=http://127.0.0.1:8545 FORK_PAYER_KEY=0x… bun run test:fork
 ```
 
-The script drives the app's own modules, twice over:
+`--hardfork cancun` is required for the blob leg; without it the node has no
+`excessBlobGas` and a type-3 transaction cannot be built.
+
+The script drives the app's own modules, three times over:
 
 1. Predicts and deploys a 2-of-2 Safe (hot wallet + passkey), deploys the passkey
    proxy, signs with both, executes, and asserts the nonce advanced by one.
 2. Deploys a 1-of-1 Safe and moves it to 2-of-2 with one MultiSend batch
    (`operation` 1) that runs `factory.createSigner` then `addOwnerWithThreshold`,
    then executes a 2-of-2 transaction from the newly installed owner set.
+3. Packs a session into one blob, publishes it as a type-3 transaction, reads the
+   blob back from the node's blob store, and decrypts it to the exact session —
+   plus a refusal check that a foreign key cannot open it.
 
 It closes with two refusals: a single signature cannot execute a 2-of-2 (reverts
 `GS021`), and the client refuses to build `execTransaction` below the threshold.
@@ -195,6 +226,13 @@ Exercised end to end on an anvil fork of Sepolia, through this app's own modules
   followed by a successful 2-of-2 execution.
 - **Refusals.** One signature cannot satisfy a 2-of-2 (reverts `GS021`), and the app
   refuses to build `execTransaction` below the threshold.
+- **Session sharing.** A session is packed (magic + IV + AES-GCM ciphertext), published as
+  a type-3 blob transaction (`blobGasUsed` 131072), read back as raw blob bytes, and
+  decrypted to the exact session the canonical codec produces; a foreign key is refused.
+  In the browser, publishing from the UI produced a working link, and opening that link in
+  a second tab imported the owner set, stripped the fragment (`replaceState` via a shallow
+  `goto`), survived a reload without re-fetching, and then deployed a real Safe at the
+  predicted address. A wrong key and an unindexed blob each surface their own message.
 - **Live reads.** Pinned deployments verified onchain, ETH/USD read from the Sepolia
   Chainlink feed, gas estimated on the exact calldata at click time.
 

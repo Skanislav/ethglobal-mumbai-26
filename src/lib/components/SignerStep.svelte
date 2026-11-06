@@ -11,6 +11,9 @@
   import { describeAccounts, discoveryPaths } from '../signers/discovery';
   import type { DiscoveredAccount } from '../signers/discovery';
   import { privateReads, privateReadsEnabled } from '../privateReads.svelte';
+  import { estimateBlobPublishCost } from '../costs';
+  import type { CostContext } from '../costs';
+  import { formatEth, formatUsd } from '../format';
 
   let {
     signers = [],
@@ -20,6 +23,7 @@
     onDeviceAddress,
     onDeviceScan,
     onRename,
+    onShare,
   }: {
     signers?: SignerRecord[];
     onAdd: (record: SignerRecord) => void;
@@ -28,6 +32,7 @@
     onCreatePasskey: (label: string) => Promise<SignerRecord>;
     onDeviceAddress: (kind: 'ledger' | 'trezor', path: string) => Promise<SignerRecord>;
     onDeviceScan: (kind: 'ledger' | 'trezor') => Promise<{ path: string; address: `0x${string}` }[]>;
+    onShare?: () => Promise<string>;
   } = $props();
 
   let busy = $state<string | null>(null);
@@ -39,6 +44,8 @@
   // while the user decides. `null` = never scanned in this session.
   let ledgerAccounts = $state<DiscoveredAccount[] | null>(null);
   let trezorAccounts = $state<DiscoveredAccount[] | null>(null);
+  let shareUrl = $state('');
+  let shareCost = $state<CostContext | null>(null);
 
   /** A friendly default so the field is optional, but two passkeys stay distinguishable. */
   function defaultPasskeyName(): string {
@@ -179,6 +186,34 @@
       haloAddress = '';
     } catch (err) {
       failure = { kind: 'HaLo', message: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async function share(): Promise<void> {
+    if (!onShare) return;
+    busy = 'share';
+    failure = null;
+    shareUrl = '';
+    try {
+      shareUrl = await onShare();
+      // The cost is read at click time, never remembered: a stale quote is worse
+      // than no quote on a fee that moves per block.
+      shareCost = await estimateBlobPublishCost();
+    } catch (err) {
+      failure = { kind: 'Share', message: err instanceof Error ? err.message : String(err) };
+    } finally {
+      busy = null;
+    }
+  }
+
+  async function copyShareLink(): Promise<void> {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      failure = null;
+    } catch {
+      // The link stays in the input: selecting and copying by hand still works.
+      failure = { kind: 'Share', message: 'Copy blocked — select the link and copy it manually.' };
     }
   }
 </script>
@@ -323,6 +358,44 @@
         <button class="link" onclick={forgetKeys}>Forget demo keys</button>
       </p>
     {/if}
+
+    {#if onShare}
+      <div class="share">
+        <h3>Share this session</h3>
+        <p class="hint">
+          Publishes the session to a temporary Sepolia blob and gives you a link. The link's key
+          stays in the fragment, so it is never sent to a server; anyone holding the link can read
+          the session and carry on locally.
+        </p>
+        <div class="row">
+          <button onclick={share} disabled={busy === 'share' || signers.length === 0}>
+            {busy === 'share' ? 'Publishing the blob…' : 'Share session via blob'}
+          </button>
+          <button onclick={copyShareLink} disabled={!shareUrl}>Copy</button>
+        </div>
+        {#if shareUrl}
+          <input
+            type="text"
+            class="share-link"
+            readonly
+            value={shareUrl}
+            aria-label="Shareable session link"
+            onfocus={(event) => event.currentTarget.select()}
+          />
+          {#if shareCost}
+            {#if shareCost.status === 'ready'}
+              <p class="hint">
+                Publish cost: ≈ {formatEth(shareCost.gas.feeWei)} ETH
+                {#if shareCost.price}(≈ {formatUsd(shareCost.gas.feeWei, shareCost.price.usd)}){/if},
+                read from the live blob base fee.
+              </p>
+            {:else}
+              <p class="hint">Publish cost unavailable: {shareCost.reason}</p>
+            {/if}
+          {/if}
+        {/if}
+      </div>
+    {/if}
     <p class="hint">
       Reads in this session: {privateReadsEnabled() ? 'private (anon-rpc sandbox)' : 'plain gateway'}.
       {#if privateReads.enabled && privateReads.status === 'pending'}
@@ -464,5 +537,25 @@
     margin: 0;
     font-size: 0.8125rem;
     color: #666;
+  }
+  .share {
+    display: grid;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border: 1px solid #dcdcdc;
+    border-radius: 8px;
+  }
+  .share h3 {
+    margin: 0;
+    font-size: 0.9375rem;
+  }
+  .share-link {
+    font: inherit;
+    font-family: ui-monospace, monospace;
+    font-size: 0.75rem;
+    padding: 0.35rem 0.45rem;
+    border: 1px solid #c9c9c9;
+    border-radius: 6px;
+    width: 100%;
   }
 </style>

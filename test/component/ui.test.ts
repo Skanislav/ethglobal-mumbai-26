@@ -233,6 +233,30 @@ describe('SignerStep', () => {
     expect(target.textContent).toContain('cannot sign here');
     destroy();
   });
+
+  it('withholds sharing until there is an owner set to share', async () => {
+    // No `onShare`: the control is absent entirely rather than rendering a dead button.
+    const withoutHandler = mountAt(SignerStep, { signers: [], ...NOOP_SIGNER_HANDLERS });
+    await tick();
+    expect(withoutHandler.target.querySelector('.share')).toBeNull();
+    withoutHandler.destroy();
+
+    const { target, destroy } = mountAt(SignerStep, {
+      signers: [
+        { kind: 'ephemeral', address: '0x1111111111111111111111111111111111111111', label: 'Demo key', canSign: true },
+      ],
+      ...NOOP_SIGNER_HANDLERS,
+      onShare: async () => 'http://localhost/#/share/key/hash',
+    });
+    await tick();
+    const buttons = Array.from(target.querySelectorAll<HTMLButtonElement>('button'));
+    const shareButton = buttons.find((b) => b.textContent?.includes('Share session'))!;
+    const copyButton = buttons.find((b) => b.textContent?.trim() === 'Copy')!;
+    expect(shareButton.disabled).toBe(false);
+    // Nothing to copy until a link exists.
+    expect(copyButton.disabled).toBe(true);
+    destroy();
+  });
 });
 
 describe('ThresholdStep', () => {

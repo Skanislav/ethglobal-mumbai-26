@@ -15,6 +15,8 @@ export type ReadClient = {
   getCode(args: { address: `0x${string}` }): Promise<Hex | undefined>;
   getChainId(): Promise<number>;
   getGasPrice(): Promise<bigint>;
+  /** Derived from the latest block's `excessBlobGas`; no JSON-RPC method exists. */
+  getBlobBaseFee(): Promise<bigint>;
   getBalance(args: { address: `0x${string}` }): Promise<bigint>;
   call(args: { to: `0x${string}`; data?: Hex; value?: bigint; account?: `0x${string}` }): Promise<{ data?: Hex }>;
   estimateGas(args: { to: `0x${string}`; data?: Hex; value?: bigint; account?: `0x${string}` }): Promise<bigint>;
@@ -92,6 +94,12 @@ export const sepoliaPublicClient: ReadClient = {
       () => plain.getBalance({ address }),
       (result) => BigInt(result as string),
     );
+  },
+
+  // Blob base fee is a function of the latest header's excessBlobGas, so there is
+  // no JSON-RPC method to route and no sandbox path to take: it stays plain.
+  getBlobBaseFee() {
+    return plain.getBlobBaseFee();
   },
 
   async call(args) {

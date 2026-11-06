@@ -14,6 +14,7 @@ declare module 'bun:test' {
     toHaveLength(n: number): void;
     toBeLessThan(n: number): void;
     toBeInstanceOf(ctor: unknown): void;
+    toMatch(pattern: RegExp | string): void;
     toMatchObject(expected: Record<string, unknown>): void;
     toThrow(pattern?: RegExp | string | (new (...args: never[]) => unknown)): void;
     rejects: {
