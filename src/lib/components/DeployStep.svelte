@@ -4,8 +4,7 @@
   import { readCostContext } from '../costs';
   import type { CostContext } from '../costs';
   import type { SignerRecord } from '../signer-types';
-  import { sendFromWallet, waitForReceipt } from '../safe';
-  import { connectInjected } from '../signers/hotWallet';
+  import { deployWithPayer } from '../safe';
 
   let {
     signers = [],
@@ -55,14 +54,9 @@
     deployStatus = { kind: 'busy', message: 'Confirm the deployment in your wallet…' };
     try {
       const call = await deployCall();
-      const payer = await connectInjected('Deploy payer');
-      const hash = await sendFromWallet(payer.provider, payer.address, {
-        to: call.to,
-        data: call.data,
-        value: call.value,
+      const hash = await deployWithPayer(call, (sent) => {
+        deployStatus = { kind: 'busy', message: 'Waiting for the deployment receipt…', detail: sent };
       });
-      deployStatus = { kind: 'busy', message: 'Waiting for the deployment receipt…', detail: hash };
-      await waitForReceipt(hash);
       // Authoritative refetch: the deployed state comes from chain, not local state.
       onDeployed();
       deployStatus = { kind: 'ok', message: `Safe deployed at ${shortAddress(call.predictedAddress)}`, detail: hash };

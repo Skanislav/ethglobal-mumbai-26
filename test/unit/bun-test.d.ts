@@ -9,11 +9,13 @@ declare module 'bun:test' {
     toBe(expected: unknown): void;
     toEqual(expected: unknown): void;
     toBeDefined(): void;
+    toBeUndefined(): void;
     toBeNull(): void;
     toContain(expected: string): void;
     toHaveLength(n: number): void;
     toBeLessThan(n: number): void;
     toBeInstanceOf(ctor: unknown): void;
+    toMatch(pattern: RegExp | string): void;
     toMatchObject(expected: Record<string, unknown>): void;
     toThrow(pattern?: RegExp | string | (new (...args: never[]) => unknown)): void;
     rejects: {
@@ -23,11 +25,19 @@ declare module 'bun:test' {
     };
     not: {
       toBe(expected: unknown): void;
+      toBeUndefined(): void;
       toBeNull(): void;
       toContain(expected: string): void;
       toHaveBeenCalled(): void;
+      toThrow(pattern?: RegExp | string | (new (...args: never[]) => unknown)): void;
     };
   };
   export const mock: { module(specifier: string, factory: () => Record<string, unknown>): void };
+  export const vi: {
+    mock(specifier: string, factory: () => Record<string, unknown>): void;
+    fn(impl?: (...args: never[]) => unknown): ((...args: never[]) => unknown) & {
+      mock: { calls: unknown[][] };
+    };
+  };
   export type Fn = Fn;
 }

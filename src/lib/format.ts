@@ -78,6 +78,20 @@ export function humanError(err: unknown): string {
       return 'That Safe address already has code. Start a new session to derive a fresh salt.';
     case 'InvalidSession':
       return `That session link is not readable: ${message.replace(/^InvalidSession: /, '')}.`;
+    case 'WrongShareKey':
+      return 'This link’s key does not open that blob. Ask the sender for the full link — the part after the second slash is the key.';
+    case 'ShareFormatError':
+      return `That blob is not a readable session: ${message.replace(/^ShareFormatError: /, '')}.`;
+    case 'BlobNotIndexed':
+      return 'The blob is not indexed yet. It is onchain, so reopen the link in a minute.';
+    case 'BlobUnknown':
+      return 'That link names a blob that Sepolia does not have, so it cannot be opened. The publish transaction probably did not carry a blob — check the transaction it came from. Publish the session again to get a working link.';
+    case 'BlobUnavailable':
+      return 'That blob is on Sepolia but the indexer has no copy of its bytes right now. Reopen the link in a minute.';
+    case 'BlobUnreachable':
+      return 'This browser could not reach the blob indexer (api.sepolia.blobscan.com), so the shared session cannot be read. Check the network, or any extension blocking that host, and reload.';
+    case 'BlobPublishRejected':
+      return `The blob was not published: ${message.replace(/^BlobPublishRejected: /, '')}.`;
     case 'DuplicateOwner':
       return 'That address is already in the signer set.';
     case 'DeploymentNotOnChain':
@@ -115,4 +129,48 @@ export function formatUsd(feeWei: bigint, usdPerEth: number): string {
   if (value === 0) return '$0';
   if (value < 0.01) return '<$0.01';
   return `$${value.toFixed(2)}`;
+}
+
+/** First letter of a name, for the initial avatars in the roster. */
+export function initial(name: string): string {
+  const trimmed = name.trim();
+  return trimmed ? trimmed[0].toUpperCase() : '?';
+}
+
+const AVATAR_HUES = ['', 'sf-avatar--violet', 'sf-avatar--rose', 'sf-avatar--sun', 'sf-avatar--teal'] as const;
+
+/** Cycles the avatar palette by row index so a roster reads as different people. */
+export function avatarClass(index: number): string {
+  return AVATAR_HUES[index % AVATAR_HUES.length];
+}
+
+/** "Mum", "Mum and Dad", "Mum, Dad and Anna" — the prose form of a name list. */
+export function joinNames(names: string[]): string {
+  if (names.length <= 1) return names.join('');
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+const SIGNER_KIND_LABEL: Record<string, string> = {
+  passkey: 'Passkey',
+  injected: 'Browser wallet',
+  ledger: 'Ledger',
+  trezor: 'Trezor',
+  halo: 'NFC chip',
+  ephemeral: 'Demo key',
+};
+
+/** The roster subtitle for an owner, or what an invited slot is still waiting for. */
+export function signerKindLabel(kind?: string): string {
+  if (!kind) return 'Waiting to join…';
+  return SIGNER_KIND_LABEL[kind] ?? kind;
+}
+
+/**
+ * A roster line's second row. When the owner's name already *is* its kind
+ * ("Browser wallet"), repeating it says nothing, so the address carries the line.
+ */
+export function memberSubtitle(member: { name: string; address?: string; kind?: string }): string {
+  const kind = signerKindLabel(member.kind);
+  if (member.address && (member.name === kind || !member.kind)) return shortAddress(member.address);
+  return kind;
 }

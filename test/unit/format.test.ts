@@ -53,4 +53,15 @@ describe('humanError', () => {
     const blocked = Object.assign(new Error('TrezorError: popup closed'), { name: 'TrezorError' });
     expect(humanError(blocked)).toContain('allow popups');
   });
+
+  it('tells a wrong share key apart from a blob that is not a session', () => {
+    const wrongKey = Object.assign(new Error('WrongShareKey: nope'), { name: 'WrongShareKey' });
+    expect(humanError(wrongKey)).toContain('key does not open that blob');
+    const notOurs = Object.assign(new Error('ShareFormatError: not an sso session blob'), {
+      name: 'ShareFormatError',
+    });
+    expect(humanError(notOurs)).toContain('not a readable session');
+    const unindexed = Object.assign(new Error('BlobNotIndexed: nope'), { name: 'BlobNotIndexed' });
+    expect(humanError(unindexed)).toContain('reopen the link in a minute');
+  });
 });

@@ -1,0 +1,145 @@
+/* The safelyfy design system: tokens plus the handful of primitives every screen
+   shares. Screens own their layout; anything that appears on three or more screens
+   (cards, pill buttons, chips, avatars) lives here so the visual language cannot
+   drift screen by screen. */
+
+:root {
+  --sf-bg: #eef1f7;
+  --sf-surface: #ffffff;
+  --sf-ink: #101828;
+  --sf-ink-soft: #344054;
+  --sf-muted: #667085;
+  --sf-line: #e4e7ec;
+  --sf-primary: #2b4df6;
+  --sf-primary-ink: #ffffff;
+  --sf-primary-soft: #eaeefe;
+  --sf-success: #12b76a;
+  --sf-success-bg: #e7f6ef;
+  --sf-warn-bg: #fff6e5;
+  --sf-warn-ink: #b54708;
+  --sf-radius-lg: 20px;
+  --sf-radius-md: 14px;
+  --sf-radius-pill: 999px;
+  --sf-shadow: 0 8px 24px rgb(16 24 40 / 0.08);
+  --sf-font: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+body {
+  margin: 0;
+  background: var(--sf-bg);
+  color: var(--sf-ink);
+  font-family: var(--sf-font);
+  -webkit-font-smoothing: antialiased;
+}
+
+.sf-card {
+  background: var(--sf-surface);
+  border-radius: var(--sf-radius-lg);
+  box-shadow: var(--sf-shadow);
+  padding: 1.25rem;
+}
+
+/* Pill buttons. Primary is the one action per screen; ghost is the alternative. */
+.sf-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.95rem 1.25rem;
+  border: 1px solid transparent;
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-primary);
+  color: var(--sf-primary-ink);
+  font: 600 1rem/1.2 var(--sf-font);
+  cursor: pointer;
+}
+
+.sf-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.sf-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sf-btn--ghost {
+  background: var(--sf-surface);
+  border-color: var(--sf-line);
+  color: var(--sf-ink);
+}
+
+.sf-btn--quiet {
+  width: auto;
+  padding: 0.5rem 0.85rem;
+  background: var(--sf-surface);
+  border-color: var(--sf-line);
+  color: var(--sf-ink);
+  font-size: 0.875rem;
+}
+
+.sf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--sf-radius-pill);
+  background: var(--sf-primary-soft);
+  color: var(--sf-ink-soft);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sf-chip--ok {
+  background: var(--sf-success-bg);
+  color: var(--sf-success);
+}
+
+.sf-chip--warn {
+  background: var(--sf-warn-bg);
+  color: var(--sf-warn-ink);
+}
+
+/* Initial avatars. The hue cycles by index so a family reads as different people. */
+.sf-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: var(--sf-primary);
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  flex: none;
+}
+
+.sf-avatar--violet {
+  background: #7a5af8;
+}
+
+.sf-avatar--rose {
+  background: #f63d68;
+}
+
+.sf-avatar--sun {
+  background: #f79009;
+}
+
+.sf-avatar--teal {
+  background: #15b79e;
+}
+
+.sf-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.sf-muted {
+  color: var(--sf-muted);
+  font-size: 0.8125rem;
+  margin: 0;
+}

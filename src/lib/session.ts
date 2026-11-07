@@ -31,6 +31,25 @@ export type PendingTx = {
 
 export type PendingSignature = { blob: string; isContract: boolean };
 
+/**
+ * A roster slot for someone who has been invited but has not produced an owner
+ * address yet. `address` is set only when the slot is linked to a real signer, so
+ * "joined" is a fact about ownership, never about a typed name.
+ */
+export type PlannedMember = { name: string; address?: `0x${string}` };
+
+/** One line of the roster the screens render. */
+export type MemberRow = {
+  name: string;
+  joined: boolean;
+  /** Present for signers, and for planned slots once linked. */
+  address?: `0x${string}`;
+  /** Signer kind, when this row is backed by a signer record. */
+  kind?: SignerRecord['kind'];
+  /** True only for a slot nobody has signed up for yet. */
+  planned: boolean;
+};
+
 export type Session = {
   version: 1;
   chainId: 11155111;
@@ -43,6 +62,10 @@ export type Session = {
   pending?: PendingTx;
   deployed?: boolean;
   executedTxHashes: `0x${string}`[];
+  /** User-facing vault name, e.g. "The Novaks". Never affects deployment. */
+  vaultName?: string;
+  /** Invited family members, address-less until they join with their own key. */
+  plannedMembers?: PlannedMember[];
 };
 
 export class InvalidSession extends Error {
@@ -125,6 +148,75 @@ export function renameSigner(session: Session, address: `0x${string}`, label: st
   return { ...session, signers };
 }
 
+export class InvalidVaultName extends Error {
+  constructor(detail: string) {
+    super(`InvalidVaultName: ${detail}`);
+    this.name = 'InvalidVaultName';
+  }
+}
+
+const VAULT_NAME_MAX = 40;
+
+/** The vault name is display text only: it is trimmed, bounded, and never signed. */
+export function setVaultName(session: Session, name: string): Session {
+  const trimmed = name.trim();
+  if (trimmed.length > VAULT_NAME_MAX) {
+    throw new InvalidVaultName(`over ${VAULT_NAME_MAX} chars`);
+  }
+  return { ...session, vaultName: trimmed || undefined };
+}
+
+/** Invites someone by name. Two slots may share a name: names are labels, not keys. */
+export function addPlannedMember(session: Session, name: string): Session {
+  const trimmed = name.trim().slice(0, 64);
+  if (!trimmed) throw new EmptyLabel();
+  return { ...session, plannedMembers: [...(session.plannedMembers ?? []), { name: trimmed }] };
+}
+
+export function removePlannedMember(session: Session, name: string): Session {
+  const plannedMembers = (session.plannedMembers ?? []).filter((m) => m.name !== name);
+  return { ...session, plannedMembers: plannedMembers.length > 0 ? plannedMembers : undefined };
+}
+
+/** Links an invited slot to the owner address that joined with it. */
+export function linkPlannedMember(
+  session: Session,
+  name: string,
+  address: `0x${string}`,
+): Session {
+  const plannedMembers = session.plannedMembers ?? [];
+  if (!plannedMembers.some((m) => m.name === name)) throw new UnknownOwner(name);
+  return {
+    ...session,
+    plannedMembers: plannedMembers.map((m) => (m.name === name ? { ...m, address: getAddress(address) } : m)),
+  };
+}
+
+/**
+ * The roster the screens render: one row per owner (joined), then one per invited
+ * slot that no owner has filled yet. "Joined" is a fact about ownership — the
+ * address must be an owner in this session — never about a typed name.
+ */
+export function memberJoinState(session: Session): MemberRow[] {
+  const planned = session.plannedMembers ?? [];
+  const rows: MemberRow[] = session.signers.map((signer) => {
+    const slot = planned.find((m) => m.address && sameAddress(m.address, signer.address));
+    return {
+      name: slot?.name ?? signer.label,
+      joined: true,
+      address: signer.address,
+      kind: signer.kind,
+      planned: false,
+    };
+  });
+  const owners = new Set(session.signers.map((s) => (s.address as string).toLowerCase()));
+  for (const slot of planned) {
+    if (slot.address && owners.has(slot.address.toLowerCase())) continue;
+    rows.push({ name: slot.name, joined: false, address: slot.address, planned: true });
+  }
+  return rows;
+}
+
 export function setThreshold(session: Session, n: number): Session {
   const max = Math.max(session.signers.length, 1);
   const threshold = Math.min(Math.max(Math.trunc(Number.isFinite(n) ? n : 1), 1), max);
@@ -196,6 +288,22 @@ function validateSigner(value: unknown, index: number): SignerRecord {
     default:
       return { ...base, kind: r.kind as 'injected' | 'ephemeral' };
   }
+}
+
+function validatePlannedMembers(value: unknown): PlannedMember[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) throw new InvalidSession('plannedMembers');
+  if (value.length === 0) return undefined;
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== 'object') throw new InvalidSession(`plannedMembers[${index}]`);
+    const m = entry as Record<string, unknown>;
+    if (typeof m.name !== 'string' || !m.name.trim()) {
+      throw new InvalidSession(`plannedMembers[${index}].name`, String(m.name));
+    }
+    const address =
+      m.address === undefined ? undefined : requireAddress(m.address, `plannedMembers[${index}].address`);
+    return { name: m.name, address };
+  });
 }
 
 function requireQuantity(value: unknown, field: string): string {
@@ -283,8 +391,10 @@ export function decodeSession(blob: string): Session {
   if (typeof raw.threshold !== 'number' || !Number.isInteger(raw.threshold)) {
     throw new InvalidSession('threshold', String(raw.threshold));
   }
-  if (raw.threshold < 1 || raw.threshold > signers.length) {
-    throw new InvalidSession('threshold', `${raw.threshold} outside 1..${signers.length}`);
+  // An empty roster is a legal pre-signer state, so the bound is `max(1, owners)`.
+  const maxThreshold = Math.max(signers.length, 1);
+  if (raw.threshold < 1 || raw.threshold > maxThreshold) {
+    throw new InvalidSession('threshold', `${raw.threshold} outside 1..${maxThreshold}`);
   }
   if (raw.safeAddress !== undefined) requireAddress(raw.safeAddress, 'safeAddress');
   if (raw.saltNonce !== undefined && typeof raw.saltNonce !== 'string') {
@@ -297,6 +407,12 @@ export function decodeSession(blob: string): Session {
   if (!Array.isArray(executedTxHashes) || executedTxHashes.some((h) => typeof h !== 'string')) {
     throw new InvalidSession('executedTxHashes');
   }
+  if (raw.vaultName !== undefined) {
+    const name = raw.vaultName;
+    if (typeof name !== 'string') throw new InvalidSession('vaultName', String(name));
+    if (name.length > VAULT_NAME_MAX) throw new InvalidSession('vaultName', `over ${VAULT_NAME_MAX} chars`);
+  }
+  const plannedMembers = validatePlannedMembers(raw.plannedMembers);
 
   return {
     version: 1,
@@ -310,6 +426,8 @@ export function decodeSession(blob: string): Session {
     pending: validatePending(raw.pending),
     deployed: raw.deployed as boolean | undefined,
     executedTxHashes: executedTxHashes as `0x${string}`[],
+    vaultName: raw.vaultName as string | undefined,
+    plannedMembers,
   };
 }
 
