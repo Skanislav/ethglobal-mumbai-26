@@ -9,6 +9,7 @@ declare module 'bun:test' {
     toBe(expected: unknown): void;
     toEqual(expected: unknown): void;
     toBeDefined(): void;
+    toBeUndefined(): void;
     toBeNull(): void;
     toContain(expected: string): void;
     toHaveLength(n: number): void;
@@ -24,6 +25,7 @@ declare module 'bun:test' {
     };
     not: {
       toBe(expected: unknown): void;
+      toBeUndefined(): void;
       toBeNull(): void;
       toContain(expected: string): void;
       toHaveBeenCalled(): void;

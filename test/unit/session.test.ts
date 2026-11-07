@@ -1,12 +1,22 @@
 import { describe, expect, it } from 'bun:test';
+import { getAddress } from 'viem';
 import {
+  addPlannedMember,
   addSigner,
   decodeSession,
   encodeSession,
+  InvalidSession,
+  InvalidVaultName,
+  EmptyLabel,
+  linkPlannedMember,
+  memberJoinState,
   newSession,
   normalizeSignerAvailability,
+  removePlannedMember,
   removeSigner,
   setThreshold,
+  setVaultName,
+  UnknownOwner,
 } from '../../src/lib/session';
 import type { Session } from '../../src/lib/session';
 import type { SignerRecord } from '../../src/lib/signer-types';
@@ -172,5 +182,108 @@ describe('session mutations', () => {
     expect(upgraded.signers).toHaveLength(1);
     expect(upgraded.signers[0].canSign).toBe(true);
     expect(upgraded.signers[0].label).toBe('My wallet');
+  });
+});
+
+describe('vault name and planned members', () => {
+  it('trims a vault name, clears it when blank, and refuses one over 40 chars', () => {
+    const named = setVaultName(base(), '  The Novaks  ');
+    expect(named.vaultName).toBe('The Novaks');
+    expect(setVaultName(named, '   ').vaultName).toBeUndefined();
+    expect(() => setVaultName(named, 'x'.repeat(41))).toThrow(InvalidVaultName);
+    // The stored blob omits an unset name entirely rather than storing `null`.
+    expect(encodeSession(setVaultName(base(), ''))).not.toContain('vaultName');
+  });
+
+  it('invites the same name twice, because a name is a label and not a key', () => {
+    const invited = addPlannedMember(addPlannedMember(base(), 'Dad'), 'Dad');
+    expect(invited.plannedMembers).toHaveLength(2);
+    expect(() => addPlannedMember(base(), '  ')).toThrow(EmptyLabel);
+  });
+
+  it('links a slot to an address and refuses an unknown slot', () => {
+    const invited = addPlannedMember(base(), 'Anna');
+    const linked = linkPlannedMember(invited, 'Anna', B);
+    expect(linked.plannedMembers?.[0].address).toBe(getAddress(B));
+    expect(() => linkPlannedMember(invited, 'Nobody', B)).toThrow(UnknownOwner);
+  });
+
+  it('lists the creator first, then owners, then unjoined slots', () => {
+    const owners = setThreshold(withSigners(injected(A, 'Mum (you)'), injected(B, 'Dad')), 2);
+    const roster = memberJoinState(
+      linkPlannedMember(
+        addPlannedMember(addPlannedMember({ ...owners, plannedMembers: [{ name: 'Anna' }] }, 'Grandpa'), 'Grandma'),
+        'Anna',
+        C,
+      ),
+    );
+    expect(roster.map((m) => [m.name, m.joined])).toEqual([
+      ['Mum (you)', true],
+      ['Dad', true],
+      ['Anna', false],
+      ['Grandpa', false],
+      ['Grandma', false],
+    ]);
+  });
+
+  it('merges a slot into its owner when the addresses match, whatever the name', () => {
+    const owners = setThreshold(withSigners(injected(A, 'Mum (you)')), 1);
+    // The slot's typed name wins the roster line; matched by address, not by label.
+    const roster = memberJoinState(linkPlannedMember(addPlannedMember(owners, 'Dad'), 'Dad', A));
+    expect(roster).toHaveLength(1);
+    expect(roster[0]).toMatchObject({ name: 'Dad', joined: true, planned: false, address: getAddress(A) });
+  });
+
+  it('keeps a linked slot unjoined until its owner is actually an owner here', () => {
+    const owners = setThreshold(withSigners(injected(A, 'Mum (you)')), 1);
+    const roster = memberJoinState(linkPlannedMember(addPlannedMember(owners, 'Dad'), 'Dad', B));
+    expect(roster.map((m) => [m.name, m.joined])).toEqual([
+      ['Mum (you)', true],
+      ['Dad', false],
+    ]);
+    expect(roster[1].kind).toBeUndefined();
+    expect(roster[1].address).toBe(getAddress(B));
+  });
+
+  it('removes an invited slot', () => {
+    const invited = addPlannedMember(addPlannedMember(base(), 'Dad'), 'Anna');
+    expect(removePlannedMember(invited, 'Dad').plannedMembers).toEqual([{ name: 'Anna' }]);
+    expect(removePlannedMember(invited, 'Nobody')).toEqual(invited);
+  });
+
+  it('round-trips the name and the roster through the codec', () => {
+    const session = linkPlannedMember(
+      addPlannedMember(setVaultName(withSigners(injected(A, 'Mum (you)')), 'The Novaks'), 'Dad'),
+      'Dad',
+      B,
+    );
+    const decoded = decodeSession(encodeSession(session));
+    expect(decoded.vaultName).toBe('The Novaks');
+    expect(decoded.plannedMembers).toEqual([{ name: 'Dad', address: getAddress(B) }]);
+    // Dad's slot is linked to B, which is not an owner in this session yet.
+    expect(memberJoinState(decoded).map((m) => [m.name, m.joined])).toEqual([
+      ['Mum (you)', true],
+      ['Dad', false],
+    ]);
+  });
+
+  it('rejects a malformed roster instead of trusting the blob', () => {
+    const raw = JSON.parse(atob(encodeSession(base()).replace(/-/g, '+').replace(/_/g, '/')));
+    const encode = (value: unknown): string =>
+      btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    expect(() => decodeSession(encode({ ...raw, plannedMembers: [{ name: 'Dad', address: '0xnope' }] }))).toThrow(
+      InvalidSession,
+    );
+    expect(() => decodeSession(encode({ ...raw, plannedMembers: 'Dad' }))).toThrow(InvalidSession);
+    expect(() => decodeSession(encode({ ...raw, vaultName: 'x'.repeat(41) }))).toThrow(InvalidSession);
+    expect(() => decodeSession(encode({ ...raw, vaultName: 7 }))).toThrow(InvalidSession);
+  });
+
+  it('decodes a session that predates both fields, including an empty roster', () => {
+    // A session stored before any key was added must survive a reload, not be discarded.
+    expect(decodeSession(encodeSession(base())).signers).toHaveLength(0);
+    const decoded = decodeSession(encodeSession(withSigners(injected(A))));
+    expect(decoded.vaultName).toBeUndefined();
+    expect(decoded.plannedMembers).toBeUndefined();
   });
 });

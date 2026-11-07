@@ -132,6 +132,22 @@ export function waitForReceipt(hash: `0x${string}`) {
   return sepoliaPublicClient.waitForTransactionReceipt({ hash, timeout: 180_000 });
 }
 
+/**
+ * The one wallet dance for a deploy: connect a payer, broadcast the call, wait for
+ * the receipt. Both the create flow and the existing-mode DeployStep go through
+ * here so the two entry points cannot drift on gas, chain check or receipt wait.
+ */
+export async function deployWithPayer(
+  call: { to: `0x${string}`; data: `0x${string}`; value?: string },
+  onSent?: (hash: `0x${string}`) => void,
+): Promise<`0x${string}`> {
+  const payer = await connectInjected('Deploy payer');
+  const hash = await sendFromWallet(payer.provider, payer.address, call);
+  onSent?.(hash);
+  await waitForReceipt(hash);
+  return hash;
+}
+
 export type ExistingSafeRead = {
   owners: `0x${string}`[];
   threshold: number;

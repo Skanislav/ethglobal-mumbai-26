@@ -10,12 +10,16 @@ import type { Session, SessionMode } from './session';
 
 export const STORAGE_KEY = 'sso.session.v1';
 export const STEP_KEY = 'sso.step.v1';
-/** How far the user may resume automatically: everything they had reached. */
+/**
+ * The step a reload resumes at. The create flow runs to index 6 (its send path);
+ * a value outside 0..6 — including one written by an older 5-step build — is
+ * rejected, and the caller decides where such a session belongs.
+ */
 export function loadStep(): number {
   try {
     const raw = localStorage.getItem(STEP_KEY);
     const n = raw === null ? Number.NaN : Number.parseInt(raw, 10);
-    return Number.isInteger(n) && n >= 0 && n <= 4 ? n : -1;
+    return Number.isInteger(n) && n >= 0 && n <= 6 ? n : -1;
   } catch {
     return -1;
   }

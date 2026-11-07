@@ -130,3 +130,47 @@ export function formatUsd(feeWei: bigint, usdPerEth: number): string {
   if (value < 0.01) return '<$0.01';
   return `$${value.toFixed(2)}`;
 }
+
+/** First letter of a name, for the initial avatars in the roster. */
+export function initial(name: string): string {
+  const trimmed = name.trim();
+  return trimmed ? trimmed[0].toUpperCase() : '?';
+}
+
+const AVATAR_HUES = ['', 'sf-avatar--violet', 'sf-avatar--rose', 'sf-avatar--sun', 'sf-avatar--teal'] as const;
+
+/** Cycles the avatar palette by row index so a roster reads as different people. */
+export function avatarClass(index: number): string {
+  return AVATAR_HUES[index % AVATAR_HUES.length];
+}
+
+/** "Mum", "Mum and Dad", "Mum, Dad and Anna" — the prose form of a name list. */
+export function joinNames(names: string[]): string {
+  if (names.length <= 1) return names.join('');
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+const SIGNER_KIND_LABEL: Record<string, string> = {
+  passkey: 'Passkey',
+  injected: 'Browser wallet',
+  ledger: 'Ledger',
+  trezor: 'Trezor',
+  halo: 'NFC chip',
+  ephemeral: 'Demo key',
+};
+
+/** The roster subtitle for an owner, or what an invited slot is still waiting for. */
+export function signerKindLabel(kind?: string): string {
+  if (!kind) return 'Waiting to join…';
+  return SIGNER_KIND_LABEL[kind] ?? kind;
+}
+
+/**
+ * A roster line's second row. When the owner's name already *is* its kind
+ * ("Browser wallet"), repeating it says nothing, so the address carries the line.
+ */
+export function memberSubtitle(member: { name: string; address?: string; kind?: string }): string {
+  const kind = signerKindLabel(member.kind);
+  if (member.address && (member.name === kind || !member.kind)) return shortAddress(member.address);
+  return kind;
+}
