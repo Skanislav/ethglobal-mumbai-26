@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import StatusLine from '../StatusLine.svelte';
   import { addressRejection, checksum, humanError } from '../../format';
   import { ANON_RPC_SPECIFIER } from '../../chains';
@@ -8,7 +7,6 @@
     privateReadsLabel,
     disablePrivateReads,
     enablePrivateReads,
-    startPrivateReads,
   } from '../../privateReads.svelte';
 
   let {
@@ -23,10 +21,6 @@
   let input = $state('');
   let busy = $state(false);
   let failure = $state('');
-
-  onMount(() => {
-    startPrivateReads();
-  });
 
   function toggleReads(): void {
     if (privateReads.enabled) disablePrivateReads();

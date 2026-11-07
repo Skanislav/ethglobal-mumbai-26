@@ -12,11 +12,13 @@ import VaultReadyScreen from '../../src/lib/components/screens/VaultReadyScreen.
 import VaultHomeScreen from '../../src/lib/components/screens/VaultHomeScreen.svelte';
 import SignerStep from '../../src/lib/components/SignerStep.svelte';
 import ThresholdStep from '../../src/lib/components/ThresholdStep.svelte';
+import RpcStatusBorder from '../../src/lib/components/RpcStatusBorder.svelte';
 import SessionProbe from '../fixtures/SessionProbe.svelte';
 import { privateReads, privateReadsLabel } from '../../src/lib/privateReads.svelte';
 import { readRouter, setReadRouter } from '../../src/lib/readRouter';
 import { session, setSession } from '../../src/lib/session.svelte';
 import { decodeSession, newSession } from '../../src/lib/session';
+import type { Session } from '../../src/lib/session';
 import type { SignerRecord } from '../../src/lib/signer-types';
 
 // The NFC driver talks to real hardware, so the tap is stubbed at the module
@@ -270,7 +272,8 @@ describe('SignerStep', () => {
     expect(halo.querySelector('button')!.disabled).toBe(true);
     expect(halo.textContent).toContain('Web NFC is not available in this browser');
     expect(halo.textContent).toContain('Chrome on Android');
-    expect(halo.textContent).toContain('cannot sign here');
+    // Scan-only: the paste-an-address fallback is gone.
+    expect(halo.querySelector('input')).toBeNull();
     destroy();
   });
 
@@ -511,53 +514,52 @@ describe('passkey naming', () => {
 });
 
 describe('private-read status reporting', () => {
-  it('says plainly when the sandbox is still starting, and never claims private', async () => {
+  it('frames the viewport in the warning colour while the sandbox starts', async () => {
     privateReads.enabled = true;
     privateReads.status = 'pending';
     privateReads.reason = null;
-    const { target, destroy } = mountAt(SignerStep, {
-      signers: [],
-      onAdd: () => {},
-      onRemove: () => {},
-      onRename: () => {},
-      ...NOOP_SIGNER_HANDLERS,
-    });
+    const { target, destroy } = mountAt(RpcStatusBorder);
     await tick();
-    expect(target.textContent).toContain('plain gateway');
-    expect(target.textContent).toContain('still starting');
+    expect(target.querySelector('.rpc-border--pending')).not.toBeNull();
+    expect(target.textContent).toContain('starting private sandbox');
     destroy();
   });
 
-  it('reports the reason private reads are unavailable', async () => {
+  it('frames the viewport red and says reads are plain when the sandbox is unavailable', async () => {
     privateReads.enabled = true;
     privateReads.status = 'unavailable';
     privateReads.reason = 'sepolia.drpc.org returned HTTP 400 — chain is not available on free plan';
-    const { target, destroy } = mountAt(SignerStep, {
-      signers: [],
-      onAdd: () => {},
-      onRemove: () => {},
-      onRename: () => {},
-      ...NOOP_SIGNER_HANDLERS,
-    });
+    const { target, destroy } = mountAt(RpcStatusBorder);
     await tick();
-    expect(target.textContent).toContain('plain gateway');
-    expect(target.textContent).toContain('chain is not available on free plan');
+    expect(target.querySelector('.rpc-border--error')).not.toBeNull();
+    expect(target.textContent).toContain('plain');
     destroy();
   });
 });
 
 describe('ApprovalRuleScreen', () => {
-  const ROSTER = [
-    { name: 'Mum', joined: true, planned: false, kind: 'passkey' as const },
-    { name: 'Dad', joined: false, planned: true },
-    { name: 'Anna', joined: false, planned: true },
-  ];
+  // One joined owner (Mum) plus two invited names (Dad, Anna).
+  const sessionFor = (threshold = 1): Session => ({
+    ...newSession('create'),
+    threshold,
+    signers: [
+      {
+        kind: 'passkey',
+        address: `0x${'11'.repeat(20)}`,
+        label: 'Mum',
+        canSign: true,
+        rawId: `0x${'22'.repeat(8)}`,
+        coordinates: { x: `0x${'33'.repeat(32)}`, y: `0x${'44'.repeat(32)}` },
+        origin: 'https://example.test',
+      },
+    ],
+    plannedMembers: [{ name: 'Dad' }, { name: 'Anna' }],
+  });
 
   it('bounds the stepper by owners, never by invited names', async () => {
     const onThreshold = vi.fn();
     const { target, destroy } = mountAt(ApprovalRuleScreen, {
-      roster: ROSTER,
-      ownerCount: 1,
+      session: sessionFor(1),
       threshold: 1,
       onThreshold,
       onCreateVault: () => {},
@@ -572,9 +574,16 @@ describe('ApprovalRuleScreen', () => {
   });
 
   it('recommends half the owners, rounded up, and warns about a single-key vault', async () => {
+    const twoOwners = (threshold: number): Session => ({
+      ...newSession('create'),
+      threshold,
+      signers: [
+        { kind: 'injected' as const, address: `0x${'11'.repeat(20)}` as `0x${string}`, label: 'Mum', canSign: true },
+        { kind: 'injected' as const, address: `0x${'22'.repeat(20)}` as `0x${string}`, label: 'Dad', canSign: true },
+      ],
+    });
     const { target, destroy } = mountAt(ApprovalRuleScreen, {
-      roster: ROSTER.slice(0, 2),
-      ownerCount: 2,
+      session: twoOwners(1),
       threshold: 1,
       onThreshold: () => {},
       onCreateVault: () => {},
@@ -584,8 +593,7 @@ describe('ApprovalRuleScreen', () => {
 
     target.remove();
     const atTwo = mountAt(ApprovalRuleScreen, {
-      roster: ROSTER.slice(0, 2),
-      ownerCount: 2,
+      session: twoOwners(2),
       threshold: 2,
       onThreshold: () => {},
       onCreateVault: () => {},
@@ -600,8 +608,13 @@ describe('ApprovalRuleScreen', () => {
   it('notifies only when the value really changes', async () => {
     const onThreshold = vi.fn();
     const { target, destroy } = mountAt(ApprovalRuleScreen, {
-      roster: [{ name: 'Mum', joined: true, planned: false }],
-      ownerCount: 1,
+      session: {
+        ...newSession('create'),
+        threshold: 1,
+        signers: [
+          { kind: 'injected' as const, address: `0x${'11'.repeat(20)}` as `0x${string}`, label: 'Mum', canSign: true },
+        ],
+      },
       threshold: 1,
       onThreshold,
       onCreateVault: () => {},
@@ -616,8 +629,7 @@ describe('ApprovalRuleScreen', () => {
   it('creates the vault from the primary CTA', async () => {
     const onCreateVault = vi.fn();
     const { target, destroy } = mountAt(ApprovalRuleScreen, {
-      roster: ROSTER.slice(0, 1),
-      ownerCount: 1,
+      session: sessionFor(1),
       threshold: 1,
       onThreshold: () => {},
       onCreateVault,
@@ -632,7 +644,7 @@ describe('ApprovalRuleScreen', () => {
 });
 
 describe('InviteScreen', () => {
-  const session = (): ReturnType<typeof newSession> => ({
+  const session = (): Session => ({
     ...newSession('create'),
     vaultName: 'The Novaks',
     threshold: 1,
@@ -676,7 +688,7 @@ describe('InviteScreen', () => {
   });
 
   it('refuses to advance without a signable key', async () => {
-    const sessionNoKey = { ...newSession('create') as ReturnType<typeof newSession>, signers: [], threshold: 1 };
+    const sessionNoKey = { ...newSession('create') as Session, signers: [], threshold: 1 };
     const { target, destroy } = mountAt(InviteScreen, { session: sessionNoKey, ...BASE });
     await tick();
     const next = Array.from(target.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
@@ -710,7 +722,7 @@ describe('InviteScreen', () => {
 
 describe('VaultHomeScreen', () => {
   const deployed = () => ({
-    ...newSession('create') as ReturnType<typeof newSession>,
+    ...newSession('create') as Session,
     vaultName: 'The Novaks',
     safeAddress: `0x${'ab'.repeat(20)}` as `0x${string}`,
     deployed: true,
@@ -761,9 +773,32 @@ describe('VaultHomeScreen', () => {
     destroy();
   });
 
-  it('routes the Send action to the proposal flow', async () => {
+  it('opens the Safe app new-transaction page in a new tab from Send', async () => {
+    const opened: string[] = [];
+    const originalOpen = window.open;
+    Object.defineProperty(window, 'open', {
+      value: (url: string) => {
+        opened.push(url);
+        return null;
+      },
+      configurable: true,
+    });
     const onSend = vi.fn();
     const { target, destroy } = mountAt(VaultHomeScreen, { session: deployed(), balanceWei: 0n, onSend });
+    await tick();
+    Array.from(target.querySelectorAll('button'))
+      .find((b) => b.textContent?.trim() === 'Send')!
+      .click();
+    expect(opened).toEqual([`https://app.safe.global/new-tx/tx-builder?safe=sep:0xABaBaBaBABabABabAbAbABAbABabababaBaBABaB`]);
+    expect(onSend).not.toHaveBeenCalled();
+    Object.defineProperty(window, 'open', { value: originalOpen, configurable: true });
+    destroy();
+  });
+
+  it('falls back to the in-app proposal flow when the vault has no address yet', async () => {
+    const onSend = vi.fn();
+    const noAddress: Session = { ...deployed(), safeAddress: undefined, deployed: false };
+    const { target, destroy } = mountAt(VaultHomeScreen, { session: noAddress, balanceWei: 0n, onSend });
     await tick();
     Array.from(target.querySelectorAll('button'))
       .find((b) => b.textContent?.trim() === 'Send')!
@@ -774,16 +809,18 @@ describe('VaultHomeScreen', () => {
 });
 
 describe('VaultReadyScreen', () => {
-  const roster = [
-    { name: 'Mum', joined: true, planned: false },
-    { name: 'Dad', joined: false, planned: true },
-    { name: 'Anna', joined: false, planned: true },
-  ];
-
   it('does not claim everyone joined when invitations are still open', async () => {
-    const { target, destroy } = mountAt(VaultReadyScreen, {
+    const session: Session = {
+      ...newSession('create'),
       vaultName: 'The Novaks',
-      roster,
+      threshold: 1,
+      signers: [
+        { kind: 'injected' as const, address: `0x${'11'.repeat(20)}` as `0x${string}`, label: 'Mum', canSign: true },
+      ],
+      plannedMembers: [{ name: 'Dad' }, { name: 'Anna' }],
+    };
+    const { target, destroy } = mountAt(VaultReadyScreen, {
+      session,
       threshold: 1,
       signerCount: 1,
       onOpenVault: () => {},
@@ -796,13 +833,18 @@ describe('VaultReadyScreen', () => {
   });
 
   it('celebrates a fully joined family and offers the test payment', async () => {
+    const session: Session = {
+      ...newSession('create'),
+      vaultName: 'The Novaks',
+      threshold: 2,
+      signers: [
+        { kind: 'injected' as const, address: `0x${'11'.repeat(20)}` as `0x${string}`, label: 'Mum', canSign: true },
+        { kind: 'injected' as const, address: `0x${'22'.repeat(20)}` as `0x${string}`, label: 'Dad', canSign: true },
+      ],
+    };
     const onTestPayment = vi.fn();
     const { target, destroy } = mountAt(VaultReadyScreen, {
-      vaultName: 'The Novaks',
-      roster: [
-        { name: 'Mum', joined: true, planned: false },
-        { name: 'Dad', joined: true, planned: false },
-      ],
+      session,
       threshold: 2,
       signerCount: 2,
       onOpenVault: () => {},
@@ -894,12 +936,12 @@ describe('KeyPickerScreen', () => {
     destroy();
   });
 
-  it('offers the already-added key when one exists', async () => {
+  it('offers to move on once a key exists', async () => {
     const onContinue = vi.fn();
     const { target, destroy } = mountAt(KeyPickerScreen, { ...HANDLERS, hasSigner: true, onContinue });
     await tick();
     Array.from(target.querySelectorAll('button'))
-      .find((b) => b.textContent?.includes('Use the key I already added'))!
+      .find((b) => b.textContent?.includes('Next: invite your family'))!
       .click();
     expect(onContinue).toHaveBeenCalledTimes(1);
     destroy();

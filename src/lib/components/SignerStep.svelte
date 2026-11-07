@@ -1,7 +1,6 @@
 <script lang="ts">
   import StatusLine from './StatusLine.svelte';
   import AccountPicker from './AccountPicker.svelte';
-  import { getAddress } from 'viem';
   import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
   import { forgetAllEphemeralKeys, storeEphemeralKey } from '../ephemeral';
   import { connectInjected } from '../signers/hotWallet';
@@ -10,7 +9,7 @@
   import type { SignerRecord } from '../signer-types';
   import { describeAccounts, discoveryPaths } from '../signers/discovery';
   import type { DiscoveredAccount } from '../signers/discovery';
-  import { privateReads, privateReadsEnabled } from '../privateReads.svelte';
+  import { formatEth } from '../format';
 
   let {
     signers = [],
@@ -34,7 +33,6 @@
 
   let busy = $state<string | null>(null);
   let failure = $state<{ kind: string; message: string } | null>(null);
-  let haloAddress = $state('');
   let haloStatus = $state<string | null>(null);
   let passkeyName = $state('');
   // Discovered accounts per device, kept after the scan so the list stays visible
@@ -170,21 +168,6 @@
     }
   }
 
-  function addHaloAddress(): void {
-    failure = null;
-    const value = haloAddress.trim();
-    if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
-      failure = { kind: 'HaLo', message: 'Enter the 42-character hex address.' };
-      return;
-    }
-    try {
-      onAdd({ kind: 'halo', address: getAddress(value), label: 'HaLo chip (address only)', canSign: false });
-      haloAddress = '';
-    } catch (err) {
-      failure = { kind: 'HaLo', message: err instanceof Error ? err.message : String(err) };
-    }
-  }
-
   async function share(): Promise<void> {
     if (!onShare) return;
     busy = 'share';
@@ -273,13 +256,6 @@
       {#if haloStatus}
         <StatusLine status="busy" message={haloStatus} />
       {/if}
-      <div class="row">
-        <input type="text" placeholder="0x… address" bind:value={haloAddress} aria-label="Address" />
-        <button onclick={addHaloAddress}>Use address</button>
-      </div>
-      <span class="reason">
-        A pasted address cannot sign here — the chip has to be tapped to register as a signable owner.
-      </span>
     </li>
 
     <li class="tile">
@@ -383,14 +359,6 @@
 
       </div>
     {/if}
-    <p class="hint">
-      Reads in this session: {privateReadsEnabled() ? 'private (anon-rpc sandbox)' : 'plain gateway'}.
-      {#if privateReads.enabled && privateReads.status === 'pending'}
-        (private sandbox still starting)
-      {:else if privateReads.enabled && privateReads.status === 'unavailable' && privateReads.reason}
-        — private reads unavailable: {privateReads.reason}
-      {/if}
-    </p>
   </div>
 </section>
 
