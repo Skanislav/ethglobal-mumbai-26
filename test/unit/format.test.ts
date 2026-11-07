@@ -54,14 +54,13 @@ describe('humanError', () => {
     expect(humanError(blocked)).toContain('allow popups');
   });
 
-  it('tells a wrong share key apart from a blob that is not a session', () => {
-    const wrongKey = Object.assign(new Error('WrongShareKey: nope'), { name: 'WrongShareKey' });
-    expect(humanError(wrongKey)).toContain('key does not open that blob');
-    const notOurs = Object.assign(new Error('ShareFormatError: not an sso session blob'), {
+  it('explains an unreadable invite link and an oversized vault', () => {
+    // Both remedies live in the sentence: copy the whole link, or shrink the vault.
+    const truncated = Object.assign(new Error('ShareFormatError: the payload is truncated'), {
       name: 'ShareFormatError',
     });
-    expect(humanError(notOurs)).toContain('not a readable session');
-    const unindexed = Object.assign(new Error('BlobNotIndexed: nope'), { name: 'BlobNotIndexed' });
-    expect(humanError(unindexed)).toContain('reopen the link in a minute');
+    expect(humanError(truncated)).toContain('copy the whole link');
+    const tooBig = Object.assign(new Error('ShareTooLarge: 4000 chars'), { name: 'ShareTooLarge' });
+    expect(humanError(tooBig)).toContain('too big to fit in a link');
   });
 });

@@ -45,7 +45,6 @@
     proposeSafeTransaction,
     execTransactionCall,
     sendFromWallet,
-    publishShareBlob,
     waitForReceipt,
   } from '../lib/safe';
   import { readCostContext } from '../lib/costs';
@@ -54,9 +53,7 @@
   import { readLedgerAddress, readTrezorAddress, scanLedgerPaths, scanTrezorPaths } from '../lib/signers/hardware';
   import { discoveryPaths } from '../lib/signers/discovery';
   import { createPasskey } from '../lib/webauthn';
-  import { decryptSessionBlob, fetchShareBlob, packSession, parseShareLink, shareLink } from '../lib/sessionShare';
-  import { forgetAllShares, forgetShare, listShares, saveShare } from '../lib/shareLinks';
-  import type { StoredShare } from '../lib/shareLinks';
+  import { createInviteLink, decodeSharePayload, parseInviteLink } from '../lib/invite';
 
   /**
    * Two flows share one step counter. Create is the mobile-first family flow:
@@ -71,7 +68,6 @@
   let booting = $state(true);
   let bootStatus = $state('Checking the pinned Safe deployments on Sepolia…');
   let globalError = $state('');
-  let shares = $state<StoredShare[]>([]);
 
   /** Create-flow deploy: the overlay between the rule screen and the ready screen. */
   let deployPhase = $state<'idle' | 'predicting' | 'awaitingWallet' | 'deploying' | 'error'>('idle');
@@ -94,36 +90,27 @@
   );
 
   onMount(() => {
-    // A share link is read before anything local is loaded: the link is the user's
-    // explicit instruction, and a stale stored session must not win over it.
-    const share = parseShareLink(location.href);
+    // An invite link is read before anything local is loaded: the link is the
+    // user's explicit instruction, and a stale stored session must not win over it.
+    const payload = parseInviteLink(location.href);
     void (async () => {
       let imported = false;
-      if (share) {
-        // Reading a blob can poll for a minute while the indexer catches up; the
-        // boot line has to say that, or the wait looks like a hang in the Safe check.
-        bootStatus = 'Reading the shared session from its Sepolia blob…';
+      if (payload) {
+        bootStatus = 'Reading the invited vault…';
         try {
-          const bytes = await fetchShareBlob(share.versionedHash);
-          setSession(normalizeSignerAvailability(await decryptSessionBlob(bytes, share.keyB64)));
+          setSession(normalizeSignerAvailability(await decodeSharePayload(payload)));
           // Strip the fragment so a reload resumes the stored session instead of
-          // re-fetching a blob that is already in localStorage. A shallow goto is
+          // re-decoding a link that is already in localStorage. A shallow goto is
           // the router-aware equivalent of `history.replaceState`.
           await goto(`${location.pathname}${location.search}`, { replace: true, shallow: true });
           imported = true;
         } catch (err) {
-          // `humanError` now names each blob failure precisely; only the generic
-          // "still polling" timeout needs the hint about reopening the link.
-          globalError =
-            err instanceof Error && err.name === 'BlobNotIndexed'
-              ? 'No blob found for that link yet. If it was published moments ago, reopen it in a minute; otherwise check the link.'
-              : humanError(err);
+          globalError = humanError(err);
         }
         bootStatus = 'Checking the pinned Safe deployments on Sepolia…';
       }
       // A failed import leaves whatever was stored alone; a successful one replaced it.
       if (!imported) loadFromStorage();
-      shares = listShares();
       // A salt only matters for deriving a fresh Safe; a session that already has an
       // address keeps it (newSalt would clear the address and the deployed flag).
       if (!session.current.saltNonce && !session.current.safeAddress) newSalt();
@@ -243,22 +230,21 @@
   }
 
   /**
-   * The welcome footer takes either an invite link (→ back into the boot import) or a
-   * Safe address (→ the existing-Safe flow), so one field serves both.
+   * The welcome footer takes either an invite link (→ decode it in place) or a Safe
+   * address (→ the existing-Safe flow), so one field serves both.
    */
   async function openFromWelcome(value: string): Promise<void> {
     const trimmed = value.trim();
     if (!trimmed) throw new Error('Paste an invite link or a Safe address.');
-    if (/^https?:|#\/share\//.test(trimmed)) {
-      // Read the blob here rather than navigating to the fragment: `goto` on a
-      // hash-only URL does not remount the page, so the boot import would never run
-      // and the link would silently do nothing.
-      const share = parseShareLink(trimmed);
-      if (!share) {
-        throw new Error('That link carries no readable session. Paste the whole link, including the part after the second slash.');
+    if (/^https?:|#\/invite\//.test(trimmed)) {
+      // Decode here rather than navigating to the fragment: `goto` on a hash-only
+      // URL does not remount the page, so the boot import would never run and the
+      // link would silently do nothing.
+      const payload = parseInviteLink(trimmed);
+      if (!payload) {
+        throw new Error('That link carries no readable vault. Paste the whole link, including everything after #/invite/.');
       }
-      const bytes = await fetchShareBlob(share.versionedHash);
-      setSession(normalizeSignerAvailability(await decryptSessionBlob(bytes, share.keyB64)));
+      setSession(normalizeSignerAvailability(await decodeSharePayload(payload)));
       inviteUrl = '';
       go(reachableStep());
       return;
@@ -511,35 +497,15 @@
   }
 
   /**
-   * Publishes the session to a blob and returns the link that opens it. The key is
-   * generated here and only ever appears in the returned fragment.
+   * Encodes the vault into the link itself. No wallet, no fee, no indexer: the
+   * whole session is in the fragment, so it opens on a device with no chain access
+   * and the invitee can add their own signers and send a fresh link on.
    */
   async function shareSession(): Promise<string> {
-    if (inviteUrl) return inviteUrl;
     const current = session.current;
-    const { keyB64, blobHex } = await packSession(current);
-    const { versionedHash } = await publishShareBlob(blobHex);
-    const url = shareLink(location.origin, location.pathname, { keyB64, versionedHash });
-    // Remembered so the publisher can get the link back after closing the tab. A
-    // reader's browser that republishes lands here too: its link is new and its own.
-    shares = saveShare({
-      url,
-      versionedHash,
-      createdAt: new Date().toISOString(),
-      signerCount: current.signers.length,
-      threshold: current.threshold,
-    });
-    inviteUrl = url;
-    return url;
-  }
-
-  function dropShare(versionedHash: `0x${string}`): void {
-    shares = forgetShare(versionedHash);
-  }
-
-  function dropAllShares(): void {
-    forgetAllShares();
-    shares = [];
+    const link = await createInviteLink(location.origin, location.pathname, current);
+    inviteUrl = link.url;
+    return link.url;
   }
 </script>
 
@@ -689,9 +655,6 @@
         onDeviceScan={onDeviceScan}
         onRename={rename}
         onShare={shareSession}
-        {shares}
-        onForgetShare={dropShare}
-        onForgetAllShares={dropAllShares}
       />
       <div class="nav">
         <button onclick={() => go(0)}>Back</button>

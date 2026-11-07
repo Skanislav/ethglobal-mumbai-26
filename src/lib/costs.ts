@@ -82,37 +82,3 @@ export async function readCostContext(call: {
     return { status: 'ready', gas, price: null, priceError: err instanceof Error ? err.message : String(err) };
   }
 }
-
-/** A type-3 self-send is 21000 gas; the blob itself is charged per blob gas unit. */
-const BLOB_TX_GAS = 21_000n;
-const BLOB_GAS_PER_BLOB = 131_072n;
-
-/**
- * Blob publishing cost at click time. `eth_estimateGas` cannot price a blob
- * transaction (the request carries no calldata and the base fee is charged
- * separately), so this reads the live blob base fee plus the current gas price
- * instead of quoting a remembered number.
- *
- * Execution gas and blob gas are priced by two different base fees, so the
- * estimate reports only the true total: putting the blob's 131072 units into
- * `gas` would multiply them by the execution gas price and overstate the cost.
- */
-export async function estimateBlobPublishCost(): Promise<CostContext> {
-  let gasPrice: bigint;
-  let blobBaseFee: bigint;
-  try {
-    [gasPrice, blobBaseFee] = await Promise.all([
-      sepoliaPublicClient.getGasPrice(),
-      sepoliaPublicClient.getBlobBaseFee(),
-    ]);
-  } catch (err) {
-    return { status: 'gas-unavailable', reason: err instanceof Error ? err.message : String(err) };
-  }
-  const feeWei = BLOB_TX_GAS * gasPrice + BLOB_GAS_PER_BLOB * blobBaseFee;
-  const gas: GasEstimate = { gas: BLOB_TX_GAS, gasPrice, feeWei };
-  try {
-    return { status: 'ready', gas, price: await readEthUsd(), priceError: null };
-  } catch (err) {
-    return { status: 'ready', gas, price: null, priceError: err instanceof Error ? err.message : String(err) };
-  }
-}

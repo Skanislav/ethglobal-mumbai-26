@@ -9,23 +9,17 @@
 // The payer key is read from the environment at run time; it is never in source.
 
 import {
-  blobsToCommitments,
-  blobsToProofs,
-  commitmentsToVersionedHashes,
   createPublicClient,
   createWalletClient,
   decodeFunctionResult,
   encodeFunctionData,
   getAddress,
-  hexToBytes,
   http,
-  toBlobSidecars,
 } from 'viem';
 import type { Hex, PublicClient, WalletClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 import { CONTRACT_NETWORKS, DEPLOYMENTS, RPC_URL } from '../src/lib/chains';
-import { getKzg } from '../src/lib/kzg';
 import { encodeCreateSigner, P256_VERIFIERS, signerFactoryAbi } from '../src/lib/passkeyFactory';
 import {
   execTransactionCall,
@@ -36,7 +30,7 @@ import {
 } from '../src/lib/safe';
 import { addSigner, decodeSession, encodeSession, newSession, setThreshold } from '../src/lib/session';
 import type { PendingTx } from '../src/lib/session';
-import { decryptSessionBlob, packSession } from '../src/lib/sessionShare';
+import { MAX_SHARE_URL_LENGTH, createInviteLink, decodeSharePayload, parseInviteLink } from '../src/lib/invite';
 import { newSyntheticPasskey, synthesizePasskeySignature } from './synthetic-assertion';
 
 const CHAIN_ID = 11155111;
@@ -267,67 +261,39 @@ async function main() {
   if (!refused) fail('execTransactionCall accepted fewer signatures than the threshold');
   console.log('threshold guard refused a 1-of-2 signature set');
 
-  // ------------------------------------------------- session share over a blob
-  // The browser publishes through the injected wallet; here the same blob is
-  // published by a local account, because a wallet cannot be driven from a script.
-  // Everything else — packing, KZG, the sidecars, the read-back, the decrypt — is
-  // the shipped code path.
-  const shareable = setThreshold(
+  // ------------------------------------------------------ invite link round trip
+  // The link carries the whole session in its fragment, so this leg needs no
+  // wallet, no chain and no indexer: it is a pure codec check against the same
+  // modules the UI calls. What it pins is that a member who joins, adds a key and
+  // re-shares produces a link the next reader can open again.
+  const invitable = setThreshold(
     [payer.address, passkeyOwner].reduce(
-      (acc, address) => addSigner(acc, { kind: 'injected', address, label: 'Wallet', canSign: true }),
+      (acc, address, i) => addSigner(acc, { kind: 'injected', address, label: `Member ${i + 1}`, canSign: false }),
       newSession('create'),
     ),
+    1,
+  );
+  const firstLink = await createInviteLink('https://safelyfy.example', '/', invitable);
+  if (firstLink.length > MAX_SHARE_URL_LENGTH) fail(`invite link is ${firstLink.length} chars`);
+  const parsedPayload = parseInviteLink(firstLink.url);
+  if (!parsedPayload) fail('the invite link did not parse');
+
+  const opener = await decodeSharePayload(parsedPayload);
+  if (opener.signers.length !== invitable.signers.length) {
+    fail(`decoded ${opener.signers.length} owners, expected ${invitable.signers.length}`);
+  }
+  if (opener.signers.some((s) => s.canSign)) fail('a link must never claim a signer can sign');
+
+  // The reader continues the session: their own wallet joins, threshold raised.
+  const joined = setThreshold(
+    addSigner(opener, { kind: 'injected', address: payer.address, label: 'Reader', canSign: true }),
     2,
   );
-  const { keyB64, blobHex } = await packSession(shareable);
-  if ((blobHex.length - 2) / 2 !== 131_072) fail(`blob is ${(blobHex.length - 2) / 2} bytes, expected 131072`);
-
-  const kzg = await getKzg();
-  const commitments = blobsToCommitments({ blobs: [blobHex], kzg });
-  const proofs = blobsToProofs({ blobs: [blobHex], commitments, kzg });
-  const sidecars = toBlobSidecars({ blobs: [blobHex], commitments, proofs });
-  const versionedHashes = commitmentsToVersionedHashes({ commitments });
-  const blobBaseFee = await pub.getBlobBaseFee();
-
-  const shareHash = await wallet.sendTransaction({
-    account: payer,
-    chain: sepolia,
-    to: payer.address,
-    value: 0n,
-    type: 'eip4844',
-    maxFeePerBlobGas: blobBaseFee * 2n,
-    blobVersionedHashes: versionedHashes,
-    blobs: [blobHex],
-    sidecars,
-    kzg,
-  } as never);
-  const shareReceipt = await pub.waitForTransactionReceipt({ hash: shareHash, timeout: 120_000 });
-  if (shareReceipt.status !== 'success') fail('the share blob transaction reverted');
-  console.log('share blob published', shareHash, 'blobGasUsed', shareReceipt.blobGasUsed);
-  if (shareReceipt.blobGasUsed !== 131_072n) fail(`blobGasUsed ${shareReceipt.blobGasUsed} != 131072`);
-
-  // Read back through the node's blob store, the way the indexer serves it: raw
-  // 131072 bytes, then authenticated-decrypt to the exact session.
-  const storedBlob = await pub.request({
-    method: 'anvil_getBlobByHash',
-    params: [versionedHashes[0]],
-  } as never) as `0x${string}`;
-  const storedBytes = hexToBytes(storedBlob);
-  if (storedBytes.length !== 131_072) fail(`the node returned ${storedBytes.length} blob bytes`);
-  const restored = await decryptSessionBlob(storedBytes, keyB64);
-  if (JSON.stringify(restored) !== JSON.stringify(decodeSession(encodeSession(shareable)))) {
-    fail('the blob did not decrypt back to the shared session');
-  }
-  console.log('share blob round-trip signers', restored.signers.length, 'threshold', restored.threshold);
-
-  let wrongKeyRefused = false;
-  try {
-    await decryptSessionBlob(storedBytes, (await packSession(shareable)).keyB64);
-  } catch (err) {
-    wrongKeyRefused = err instanceof Error && err.name === 'WrongShareKey';
-  }
-  if (!wrongKeyRefused) fail('a foreign key opened the blob');
-  console.log('foreign key refused');
+  const secondLink = await createInviteLink('https://safelyfy.example', '/', joined);
+  if (secondLink.url === firstLink.url) fail('the re-shared link did not change');
+  const reopened = await decodeSharePayload(parseInviteLink(secondLink.url) ?? '');
+  if (reopened.threshold !== 2) fail(`re-shared threshold ${reopened.threshold} != 2`);
+  console.log('invite link chars', firstLink.length, '-> re-shared', secondLink.length);
 
   console.log('OK');
 }

@@ -123,8 +123,10 @@ describe('OpenPanel', () => {
     destroy();
   });
 
-  it('names the blob failure in human terms instead of the error class', async () => {
-    const rejection = Object.assign(new Error('the indexer rejected the read (HTTP 400)'), { name: 'ShareFormatError' });
+  it('names an unreadable invite link in human terms instead of the error class', async () => {
+    const rejection = Object.assign(new Error('ShareFormatError: the payload is truncated'), {
+      name: 'ShareFormatError',
+    });
     const { target, destroy } = mountAt(OpenPanel, {
       onOpen: async () => {
         throw rejection;
@@ -132,12 +134,12 @@ describe('OpenPanel', () => {
       onImportBlob: () => {},
     });
     const input = target.querySelector<HTMLInputElement>('#open-value')!;
-    input.value = `http://127.0.0.1/#/share/${'A'.repeat(43)}/0x${'11'.repeat(32)}`;
+    input.value = `http://127.0.0.1/#/invite/${'AbCd-_12'.repeat(4)}`;
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await tick();
     target.querySelector<HTMLFormElement>('form')!.dispatchEvent(new Event('submit', { cancelable: true }));
     await new Promise((r) => setTimeout(r, 20));
-    expect(target.textContent).toContain('is not a readable session');
+    expect(target.textContent).toContain('is not readable');
     expect(target.textContent).not.toContain('ShareFormatError:');
     destroy();
   });
