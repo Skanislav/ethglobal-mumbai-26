@@ -286,4 +286,9 @@ describe('vault name and planned members', () => {
     expect(decoded.vaultName).toBeUndefined();
     expect(decoded.plannedMembers).toBeUndefined();
   });
+
+  it('carries viaInvite through the codec only when set', () => {
+    expect(decodeSession(encodeSession(base())).viaInvite).toBeUndefined();
+    expect(decodeSession(encodeSession({ ...base(), viaInvite: true })).viaInvite).toBe(true);
+  });
 });

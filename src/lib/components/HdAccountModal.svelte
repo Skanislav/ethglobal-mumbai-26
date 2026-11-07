@@ -1,8 +1,9 @@
 <script lang="ts">
-  // Paginated hardware-account picker: one page of ten 44'/60'/i'/0/0 accounts at
+  // Paginated Ledger-account picker: one page of ten 44'/60'/i'/0/0 accounts at
   // a time, each with its Sepolia balance and an already-an-owner flag. Adding a
   // row flags it in place so several accounts can be added in one sitting; Done
-  // closes. The manual path is the escape hatch inside a details.
+  // closes. The manual path is the escape hatch inside a details. Trezor never
+  // uses this modal — its account picker lives inside Trezor Suite.
   import { describeAccounts, HD_PAGE_SIZE } from '../signers/discovery';
   import type { DiscoveredAccount } from '../signers/discovery';
   import type { SignerRecord } from '../signer-types';
@@ -10,17 +11,19 @@
   import { SvelteSet } from 'svelte/reactivity';
 
   let {
-    kind,
     owners,
     onScan,
     onAdd,
+    onAdded,
     onClose,
   }: {
-    kind: 'ledger' | 'trezor';
     /** Current signers, so accounts already on the vault render as Owner rows. */
     owners: SignerRecord[];
-    onScan: (kind: 'ledger' | 'trezor', page: number) => Promise<{ path: string; address: `0x${string}` }[]>;
-    onAdd: (kind: 'ledger' | 'trezor', path: string) => Promise<unknown>;
+    onScan: (page: number) => Promise<{ path: string; address: `0x${string}` }[]>;
+    /** Builds the signer record for a device path (reads the address from the Ledger). */
+    onAdd: (path: string) => Promise<SignerRecord>;
+    /** Propagates each added record to the screen, which stores it. */
+    onAdded: (record: SignerRecord) => void;
     onClose: () => void;
   } = $props();
 
@@ -40,7 +43,7 @@
     busy = true;
     failure = '';
     try {
-      accounts = await describeAccounts(await onScan(kind, p), owners);
+      accounts = await describeAccounts(await onScan(p), owners);
       page = p;
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
@@ -59,7 +62,7 @@
     busy = true;
     failure = '';
     try {
-      await onAdd(kind, account.path);
+      onAdded(await onAdd(account.path));
       added.add(account.path);
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
@@ -74,7 +77,7 @@
     busy = true;
     failure = '';
     try {
-      await onAdd(kind, value);
+      onAdded(await onAdd(value));
       added.add(value);
       manual = '';
     } catch (err) {
@@ -94,7 +97,7 @@
 >
   <div class="modal" role="dialog" aria-modal="true" aria-label="Choose an account">
     <header>
-      <h2>Accounts on this {kind === 'ledger' ? 'Ledger' : 'Trezor'}</h2>
+      <h2>Accounts on this Ledger</h2>
       <p class="sf-muted">
         Showing <code>m/44'/60'/{page * HD_PAGE_SIZE}'</code>–<code>m/44'/60'/{page * HD_PAGE_SIZE + HD_PAGE_SIZE - 1}'</code>
         — one page per click.

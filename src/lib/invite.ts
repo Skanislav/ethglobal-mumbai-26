@@ -117,6 +117,9 @@ function fromCompact(compact: CompactSession): Session {
     signers,
     threshold,
     ...(plannedMembers.length > 0 ? { plannedMembers } : {}),
+    // A link always arrives *via* an invite; the flag survives every re-share on
+    // this device so the "send the link back" prompt never goes quiet.
+    viaInvite: true,
     ...(compact.n ? { vaultName: compact.n } : {}),
     ...(compact.a ? { safeAddress: getAddress(compact.a) } : {}),
     ...(compact.d ? { deployed: true } : {}),

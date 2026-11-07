@@ -34,6 +34,7 @@
   let sharing = $state(false);
   let failure = $state('');
   let copied = $state(false);
+  let copiedUrl = $state('');
   let newName = $state('');
 
   const groups = $derived(memberGroups(session));
@@ -61,9 +62,16 @@
 
   async function copy(): Promise<void> {
     if (!inviteUrl) return;
+    // Second press, this exact link already copied: the job is to send it back,
+    // so the button advances instead of copying again.
+    if (copied && copiedUrl === inviteUrl) {
+      onNext();
+      return;
+    }
     try {
       await navigator.clipboard.writeText(inviteUrl);
       copied = true;
+      copiedUrl = inviteUrl;
       failure = '';
     } catch {
       failure = 'Copy blocked — select the link and copy it by hand.';
@@ -95,10 +103,18 @@
 
 <div class="invite">
   <span class="label">Invite link</span>
+  {#if session.viaInvite}
+    <p class="handback">
+      You joined through a link, so nothing here syncs by itself. The key you just added — and any change
+      you make — exists only in the link below. <strong>Copy it and send it back to whoever invited
+      you</strong>{groups.length - joined > 0 ? ' (or on to the next member)' : ''}; their copy and the
+      vault's owner list update only from the newest link.
+    </p>
+  {/if}
   {#if inviteUrl}
     <div class="row">
       <input class="link" type="text" readonly value={inviteUrl} onfocus={(e) => e.currentTarget.select()} />
-      <button class="sf-btn sf-btn--quiet" onclick={copy}>{copied ? 'Copied' : 'Copy'}</button>
+      <button class="sf-btn sf-btn--quiet" onclick={copy}>{copied && copiedUrl === inviteUrl ? 'Copied' : 'Copy'}</button>
     </div>
   {:else if sharing}
     <p class="pending">Building your invite link…</p>
@@ -141,7 +157,15 @@
 
 <div class="cta">
   <button class="sf-btn" onclick={inviteUrl ? copy : share} disabled={sharing || !onPublish}>
-    {sharing ? 'Building…' : inviteUrl ? 'Share invite link' : 'Create invite link'}
+    {sharing
+      ? 'Building…'
+      : inviteUrl
+        ? session.viaInvite
+          ? copied
+            ? 'Copied — now send it back'
+            : 'Copy link to send back'
+          : 'Share invite link'
+        : 'Create invite link'}
   </button>
   <button class="sf-btn sf-btn--ghost" onclick={onNext} disabled={!canAdvance}>Next: approval rule</button>
   {#if !canAdvance}
@@ -150,6 +174,15 @@
 </div>
 
 <style>
+  .handback {
+    margin: 0;
+    padding: 0.55rem 0.7rem;
+    font-size: 0.8125rem;
+    color: var(--sf-ink-soft);
+    border: 1px dashed var(--sf-line);
+    border-radius: var(--sf-radius-md);
+  }
+
   h1 {
     margin: 0;
     font-size: 1.5rem;

@@ -63,11 +63,15 @@ const NOOP_SIGNER_HANDLERS = {
     label: 'stub',
     canSign: true,
   }),
-  onDeviceAddress: async (kind: 'ledger' | 'trezor'): Promise<SignerRecord> =>
-    kind === 'ledger'
-      ? { kind: 'ledger', address: '0x0000000000000000000000000000000000000001', label: 'Ledger', canSign: true, path: "44'/60'/0'/0/0" }
-      : { kind: 'trezor', address: '0x0000000000000000000000000000000000000001', label: 'Trezor', canSign: true, path: "44'/60'/0'/0/0" },
+  onDeviceAddress: async (): Promise<SignerRecord> => ({
+    kind: 'ledger',
+    address: '0x0000000000000000000000000000000000000001',
+    label: 'Ledger',
+    canSign: true,
+    path: "44'/60'/0'/0/0",
+  }),
   onDeviceScan: async (): Promise<{ path: string; address: `0x${string}` }[]> => [],
+  onTrezorPick: async (): Promise<SignerRecord[]> => [],
 };
 
 describe('WelcomeScreen', () => {
@@ -179,12 +183,32 @@ describe('SignerStep', () => {
     const trezor = Array.from(target.querySelectorAll('li.tile')).find((t) => t.textContent?.includes('Trezor'))!;
     expect(trezor.querySelector('button')!.disabled).toBe(false);
     expect(trezor.querySelector('.reason')).toBeNull();
-    // No account list until the user actually scans the device.
-    expect(trezor.textContent).not.toContain('Account 0');
+    destroy();
+  });
+
+  it('adds every account the Trezor Suite picker returns', async () => {
+    const onTrezorPick = vi.fn(async (): Promise<SignerRecord[]> => [
+      { kind: 'trezor', address: '0x1111111111111111111111111111111111111111', label: 'Trezor', canSign: true, path: "44'/60'/0'/0/0" },
+      { kind: 'trezor', address: '0x2222222222222222222222222222222222222222', label: 'Trezor', canSign: true, path: "44'/60'/1'/0/0" },
+    ]);
+    const onAdd = vi.fn();
+    const { target, destroy } = mountAt(SignerStep, { signers: [], ...NOOP_SIGNER_HANDLERS, onTrezorPick, onAdd });
+    await tick();
+    const trezor = Array.from(target.querySelectorAll('li.tile')).find((t) => t.textContent?.includes('Trezor'))!;
+    (trezor.querySelector('button') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(onAdd).toHaveBeenCalledTimes(2));
+    // One handoff, both records straight from Suite — no app-side scan ran.
+    expect(onTrezorPick).toHaveBeenCalledTimes(1);
+    expect(onAdd.mock.calls.map(([record]) => record.address)).toEqual([
+      '0x1111111111111111111111111111111111111111',
+      '0x2222222222222222222222222222222222222222',
+    ]);
     destroy();
   });
 
   it('lists discovered device accounts instead of guessing one path', async () => {
+    // The Ledger button is gated on WebHID, which jsdom lacks; stub its presence.
+    Object.defineProperty(navigator, 'hid', { value: {}, configurable: true });
     const accounts = [
       { path: "44'/60'/0'/0/0", account: 0, address: '0x1111111111111111111111111111111111111111' },
       { path: "44'/60'/1'/0/0", account: 1, address: '0x2222222222222222222222222222222222222222' },
@@ -198,10 +222,10 @@ describe('SignerStep', () => {
         return '0x0';
       },
     });
-    const onDeviceAddress = vi.fn(async (kind: 'ledger' | 'trezor', path: string): Promise<SignerRecord> => ({
-      kind,
+    const onDeviceAddress = vi.fn(async (path: string): Promise<SignerRecord> => ({
+      kind: 'ledger',
       address: '0x1111111111111111111111111111111111111111',
-      label: 'Trezor',
+      label: 'Ledger',
       canSign: true,
       path,
     }));
@@ -218,15 +242,16 @@ describe('SignerStep', () => {
       onDeviceAddress,
     });
     await tick();
-    const trezor = Array.from(target.querySelectorAll('li.tile')).find((t) => t.textContent?.includes('Trezor'))!;
-    (trezor.querySelector('button') as HTMLButtonElement).click();
+    const ledger = Array.from(target.querySelectorAll('li.tile')).find((t) => t.textContent?.includes('Ledger'))!;
+    (ledger.querySelector('button') as HTMLButtonElement).click();
     await promise;
-    await vi.waitFor(() => expect(trezor.textContent).toContain('Account 1'));
-    expect(onDeviceScan).toHaveBeenCalledWith('trezor');
-    expect(trezor.textContent).toContain("m/44'/60'/1'/0/0");
-    expect(trezor.textContent).toContain('no Sepolia ETH');
-    expect(trezor.textContent).toContain('balance unknown');
+    await vi.waitFor(() => expect(ledger.textContent).toContain('Account 1'));
+    expect(onDeviceScan).toHaveBeenCalled();
+    expect(ledger.textContent).toContain("m/44'/60'/1'/0/0");
+    expect(ledger.textContent).toContain('no Sepolia ETH');
+    expect(ledger.textContent).toContain('balance unknown');
     destroy();
+    delete (navigator as unknown as Record<string, unknown>).hid;
   });
 
   it('marks a demo-key owner set TESTNET ONLY', async () => {
@@ -875,6 +900,45 @@ describe('KeyPickerScreen', () => {
     onDeviceAddress: NOOP_SIGNER_HANDLERS.onDeviceAddress,
   };
 
+  it('propagates a Ledger account added inside the modal to onAdded', async () => {
+    // Regression: the modal once called onAdd but never handed the record up, so
+    // adding a Ledger account looked like it did nothing.
+    const added: SignerRecord[] = [];
+    const onDeviceScan = async () => [
+      { path: "44'/60'/0'/0/0", address: '0x1111111111111111111111111111111111111111' as const },
+    ];
+    const onDeviceAddress = async (path: string): Promise<SignerRecord> => ({
+      kind: 'ledger',
+      address: '0x1111111111111111111111111111111111111111',
+      label: 'Ledger',
+      canSign: true,
+      path,
+    });
+    const { target, destroy } = mountAt(KeyPickerScreen, {
+      ...HANDLERS,
+      onDeviceScan,
+      onDeviceAddress,
+      onAdded: (r: SignerRecord) => added.push(r),
+    });
+    // Balances read through the routing seam; stub it so the modal's describe resolves.
+    setReadRouter({ request: async () => '0x0' });
+    await tick();
+    Array.from(target.querySelectorAll<HTMLButtonElement>('li.tile button'))
+      .find((b) => b.textContent?.includes('Hardware wallet'))!
+      .click();
+    await tick();
+    Array.from(target.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Continue with Ledger'))!
+      .click();
+    // Modal scans page 0, then its Add button adds the row.
+    await vi.waitFor(() => expect(target.querySelector('.modal')).not.toBeNull());
+    await vi.waitFor(() => expect(target.querySelector('.modal .accounts li button')).not.toBeNull());
+    (target.querySelector('.modal .accounts li button') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(added).toHaveLength(1));
+    expect(added[0]).toMatchObject({ kind: 'ledger', path: "44'/60'/0'/0/0" });
+    expect(added[0].canSign).toBe(true);
+    destroy();
+  });
   it('disables the wallet tile with its reason and keeps Trezor available', async () => {
     const { target, destroy } = mountAt(KeyPickerScreen, HANDLERS);
     await tick();

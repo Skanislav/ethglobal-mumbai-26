@@ -18,6 +18,7 @@
     onCreatePasskey,
     onDeviceAddress,
     onDeviceScan,
+    onTrezorPick,
     onRename,
     onShare,
   }: {
@@ -26,8 +27,11 @@
     onRemove: (address: `0x${string}`) => void;
     onRename: (address: `0x${string}`, label: string) => void;
     onCreatePasskey: (label: string) => Promise<SignerRecord>;
-    onDeviceAddress: (kind: 'ledger' | 'trezor', path: string) => Promise<SignerRecord>;
-    onDeviceScan: (kind: 'ledger' | 'trezor') => Promise<{ path: string; address: `0x${string}` }[]>;
+    onDeviceAddress: (path: string) => Promise<SignerRecord>;
+    /** Ledger account scan, one page of HD paths. Trezor never uses this. */
+    onDeviceScan: () => Promise<{ path: string; address: `0x${string}` }[]>;
+    /** Trezor's add is a Suite round trip that may return several picked accounts. */
+    onTrezorPick: () => Promise<SignerRecord[]>;
     onShare?: () => Promise<string>;
   } = $props();
 
@@ -35,10 +39,10 @@
   let failure = $state<{ kind: string; message: string } | null>(null);
   let haloStatus = $state<string | null>(null);
   let passkeyName = $state('');
-  // Discovered accounts per device, kept after the scan so the list stays visible
-  // while the user decides. `null` = never scanned in this session.
+  // Discovered Ledger accounts, kept after the scan so the list stays visible
+  // while the user decides. `null` = never scanned in this session. Trezor keeps
+  // no list — Suite's picker returns the final selection directly.
   let ledgerAccounts = $state<DiscoveredAccount[] | null>(null);
-  let trezorAccounts = $state<DiscoveredAccount[] | null>(null);
   let shareUrl = $state('');
 
   /** A friendly default so the field is optional, but two passkeys stay distinguishable. */
@@ -106,41 +110,54 @@
   }
 
   /**
-   * Reads the accounts on the device, then balances and owner flags. The device is
-   * opened once per scan (the transports hold a session), so this is one prompt
-   * rather than one per account.
+   * Reads the accounts on the Ledger, then balances and owner flags. WebHID is
+   * opened once per scan, so this is one device prompt rather than one per account.
    */
-  async function scan(kind: 'ledger' | 'trezor'): Promise<void> {
-    busy = kind;
+  async function scanLedger(): Promise<void> {
+    busy = 'ledger';
     failure = null;
     try {
-      const raw = await onDeviceScan(kind);
-      const described = await describeAccounts(raw, signers);
-      if (kind === 'ledger') ledgerAccounts = described;
-      else trezorAccounts = described;
+      ledgerAccounts = await describeAccounts(await onDeviceScan(), signers);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      failure = { kind: kind === 'ledger' ? 'Ledger' : 'Trezor', message };
-      if (kind === 'ledger') ledgerAccounts = null;
-      else trezorAccounts = null;
+      failure = { kind: 'Ledger', message };
+      ledgerAccounts = null;
     } finally {
       busy = null;
     }
   }
 
   /**
-   * Adds the account at `path` — from the scanned list or a hand-typed path, which
-   * differ only in where the path came from. The path is stored on the record so
-   * signing later reopens the same account instead of guessing.
+   * Trezor's account picker lives in Trezor Suite: clicking the button hands off,
+   * the user selects accounts there, and the selection comes back as ready-made
+   * signer records. Several can be picked in one round trip.
    */
-  async function addDevice(kind: 'ledger' | 'trezor', path: string): Promise<void> {
-    busy = kind;
+  async function pickTrezor(): Promise<void> {
+    busy = 'trezor';
     failure = null;
     try {
-      onAdd(await onDeviceAddress(kind, path));
+      for (const record of await onTrezorPick()) onAdd(record);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      failure = { kind: kind === 'ledger' ? 'Ledger' : 'Trezor', message };
+      failure = { kind: 'Trezor', message };
+    } finally {
+      busy = null;
+    }
+  }
+
+  /**
+   * Adds the Ledger account at `path` — from the scanned list or a hand-typed
+   * path, which differ only in where the path came from. The path is stored on
+   * the record so signing later reopens the same account instead of guessing.
+   */
+  async function addLedger(path: string): Promise<void> {
+    busy = 'ledger';
+    failure = null;
+    try {
+      onAdd(await onDeviceAddress(path));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      failure = { kind: 'Ledger', message };
     } finally {
       busy = null;
     }
@@ -261,38 +278,27 @@
     <li class="tile">
       <h3>Ledger</h3>
       <p class="why">USB HID connection to the Ethereum app. Lists the accounts on the device.</p>
-      <button onclick={() => scan('ledger')} disabled={!hasHid || busy === 'ledger'}>
+      <button onclick={scanLedger} disabled={!hasHid || busy === 'ledger'}>
         {busy === 'ledger' ? 'Reading the device…' : ledgerAccounts ? 'Scan Ledger again' : 'Find accounts on Ledger'}
       </button>
       {#if !hasHid}<span class="reason">WebHID is unavailable in this browser (Firefox blocks it).</span>{/if}
       {#if ledgerAccounts}
         <AccountPicker
-          kind="ledger"
           accounts={ledgerAccounts}
           busy={busy === 'ledger'}
-          onPick={(account) => addDevice('ledger', account.path)}
-          onRescan={() => scan('ledger')}
-          onManual={(path) => addDevice('ledger', path)}
+          onPick={(account) => addLedger(account.path)}
+          onRescan={scanLedger}
+          onManual={addLedger}
         />
       {/if}
     </li>
 
     <li class="tile">
       <h3>Trezor</h3>
-      <p class="why">Signs through the Trezor Suite popup — works without WebHID.</p>
-      <button onclick={() => scan('trezor')} disabled={busy === 'trezor'}>
-        {busy === 'trezor' ? 'Waiting for the device…' : trezorAccounts ? 'Scan Trezor again' : 'Find accounts on Trezor'}
+      <p class="why">Picking and signing happen in Trezor Suite — works without WebHID.</p>
+      <button onclick={pickTrezor} disabled={busy === 'trezor'}>
+        {busy === 'trezor' ? 'Choose accounts in Trezor Suite…' : 'Choose accounts in Trezor Suite'}
       </button>
-      {#if trezorAccounts}
-        <AccountPicker
-          kind="trezor"
-          accounts={trezorAccounts}
-          busy={busy === 'trezor'}
-          onPick={(account) => addDevice('trezor', account.path)}
-          onRescan={() => scan('trezor')}
-          onManual={(path) => addDevice('trezor', path)}
-        />
-      {/if}
     </li>
   </ul>
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { SignerRecord } from '../../signer-types';
+  import { humanError, shortAddress } from '../../format';
   import { haloSignerAddress, readHaloPublicKey } from '../../signers/halo';
-  import { humanError } from '../../format';
   import HdAccountModal from '../HdAccountModal.svelte';
 
   type Choice = 'passkey' | 'halo' | 'injected' | 'hardware';
@@ -11,6 +11,7 @@
     onCreatePasskey,
     onDeviceAddress,
     onDeviceScan,
+    onTrezorPick,
     onConnectInjected,
     hasSigner = false,
     onContinue,
@@ -20,12 +21,11 @@
     /** Receives the record the chosen key produced; the parent stores and advances. */
     onAdded: (record: SignerRecord) => void;
     onCreatePasskey: (label: string) => Promise<SignerRecord>;
-    onDeviceAddress: (kind: 'ledger' | 'trezor', path: string) => Promise<SignerRecord>;
-    /** Scans one page of HD accounts on the device; powers the account-picker modal. */
-    onDeviceScan?: (
-      kind: 'ledger' | 'trezor',
-      page: number,
-    ) => Promise<{ path: string; address: `0x${string}` }[]>;
+    onDeviceAddress: (path: string) => Promise<SignerRecord>;
+    /** Scans one page of HD accounts on a Ledger; powers the account-picker modal. */
+    onDeviceScan?: (page: number) => Promise<{ path: string; address: `0x${string}` }[]>;
+    /** Trezor's add is a Suite round trip that may return several picked accounts. */
+    onTrezorPick?: () => Promise<SignerRecord[]>;
     onConnectInjected?: () => Promise<SignerRecord>;
     /** A signable owner already exists, so the screen offers "Continue" without adding another. */
     hasSigner?: boolean;
@@ -112,9 +112,16 @@
         if (!onConnectInjected) throw new Error('WalletUnavailable: no connect handler');
         onAdded(await onConnectInjected());
       } else if (choice === 'hardware') {
-        // Accounts are picked inside the modal, which adds them itself.
-        if (!onDeviceScan) throw new Error('WalletUnavailable: no scan handler');
-        modalOpen = true;
+        if (device === 'trezor') {
+          // The picker lives inside Trezor Suite: one click, the user selects
+          // accounts there, and the selection comes back with addresses attached.
+          if (!onTrezorPick) throw new Error('WalletUnavailable: no Trezor handler');
+          for (const record of await onTrezorPick()) onAdded(record);
+        } else {
+          // Ledger accounts are picked inside the modal, which adds them itself.
+          if (!onDeviceScan) throw new Error('WalletUnavailable: no scan handler');
+          modalOpen = true;
+        }
       } else {
         await addChip();
       }
@@ -155,6 +162,7 @@
     {#each sessionSigners as signer (signer.address)}
       <li>
         <span class="added-name">{signer.label}</span>
+        <code class="addr">{shortAddress(signer.address)}</code>
         <span class="sf-chip sf-chip--ok">Added</span>
       </li>
     {/each}
@@ -253,10 +261,10 @@
 
 {#if modalOpen && onDeviceScan}
   <HdAccountModal
-    kind={device}
     owners={sessionSigners}
     onScan={onDeviceScan}
     onAdd={onDeviceAddress}
+    {onAdded}
     onClose={() => (modalOpen = false)}
   />
 {/if}
@@ -412,6 +420,12 @@
   .added-name {
     font-weight: 600;
     font-size: 0.875rem;
+  }
+
+  .addr {
+    margin-left: auto;
+    font-size: 0.75rem;
+    color: var(--sf-muted);
   }
 
   .hint-left {

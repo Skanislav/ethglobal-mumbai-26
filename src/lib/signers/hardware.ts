@@ -167,27 +167,28 @@ export async function initTrezor(): Promise<TrezorConnectApi> {
   return api;
 }
 
-export async function readTrezorAddress(path: string): Promise<`0x${string}`> {
+/**
+ * Trezor's add flow is a round trip into Trezor Suite: `selectAccount` hands the
+ * account list to Suite itself, the user picks the addresses there, and the
+ * selection comes back with paths attached. Unlike Ledger there is no app-side
+ * scan — Suite already knows the device's accounts, so our paginated modal would
+ * be a worse copy of the same screen.
+ */
+export async function pickTrezorAccounts(): Promise<{ path: string; address: `0x${string}` }[]> {
   const api = await initTrezor();
-  const res = await api.ethereumGetAddress({ path: `m/${path}`, showOnTrezor: true });
+  const res = await api.selectAccount({
+    coin: 'eth',
+    selectionType: 'multi',
+    addressSelection: 'manual',
+  });
   if ('error' in res) {
-    throw new TrezorError(trezorDetail(res.error.code, res.error.message || 'the address request was declined'));
+    throw new TrezorError(trezorDetail(res.error.code, res.error.message || 'the account selection was declined'));
   }
-  return deviceAddress(res.payload.address);
-}
-
-/** Same one-session scan for Trezor, whose `init` is the expensive part. */
-export async function scanTrezorPaths(paths: string[], confirm = false): Promise<{ path: string; address: `0x${string}` }[]> {
-  const api = await initTrezor();
-  const found: { path: string; address: `0x${string}` }[] = [];
-  for (const path of paths) {
-    const res = await api.ethereumGetAddress({ path: `m/${path}`, showOnTrezor: confirm });
-    if ('error' in res) {
-      throw new TrezorError(trezorDetail(res.error.code, res.error.message || 'the address request was declined'));
-    }
-    found.push({ path, address: deviceAddress(res.payload.address) });
-  }
-  return found;
+  const picked = res.payload
+    .filter((account) => typeof account.address === 'string')
+    .map((account) => ({ path: account.path.replace(/^m\//, ''), address: deviceAddress(account.address as string) }));
+  if (picked.length === 0) throw new TrezorError('no account was selected');
+  return picked;
 }
 
 export async function signWithTrezor(ctx: SigningContext, path: string): Promise<EthSafeSignature> {

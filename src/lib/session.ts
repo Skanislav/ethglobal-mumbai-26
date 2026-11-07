@@ -66,6 +66,12 @@ export type Session = {
   vaultName?: string;
   /** Invited family members, address-less until they join with their own key. */
   plannedMembers?: PlannedMember[];
+  /**
+   * This device joined through an invite link rather than creating the vault.
+   * The link is the only channel the session travels on, so the UI uses this to
+   * say "send the link back" once the joiner adds or changes anything.
+   */
+  viaInvite?: boolean;
 };
 
 export class InvalidSession extends Error {
@@ -185,10 +191,14 @@ export function linkPlannedMember(
   address: `0x${string}`,
 ): Session {
   const plannedMembers = session.plannedMembers ?? [];
-  if (!plannedMembers.some((m) => m.name === name)) throw new UnknownOwner(name);
+  // The first unlinked slot of this name fills first: two same-named slots are
+  // two devices of one member, so the second keeps waiting rather than both
+  // pointing at the same address.
+  const target = plannedMembers.findIndex((m) => m.name === name && !m.address);
+  if (target === -1) throw new UnknownOwner(name);
   return {
     ...session,
-    plannedMembers: plannedMembers.map((m) => (m.name === name ? { ...m, address: getAddress(address) } : m)),
+    plannedMembers: plannedMembers.map((m, i) => (i === target ? { ...m, address: getAddress(address) } : m)),
   };
 }
 
@@ -470,6 +480,7 @@ export function decodeSession(blob: string): Session {
     deployed: raw.deployed as boolean | undefined,
     executedTxHashes: executedTxHashes as `0x${string}`[],
     vaultName: raw.vaultName as string | undefined,
+    viaInvite: raw.viaInvite === true ? true : undefined,
     plannedMembers,
   };
 }

@@ -4,14 +4,12 @@
   import type { DiscoveredAccount } from '../signers/discovery';
 
   let {
-    kind,
     accounts = [],
     busy = false,
     onPick,
     onRescan,
     onManual,
   }: {
-    kind: 'ledger' | 'trezor';
     accounts?: DiscoveredAccount[];
     busy?: boolean;
     onPick: (account: DiscoveredAccount) => void;
@@ -19,7 +17,6 @@
     onManual: (path: string) => void;
   } = $props();
 
-  const deviceName = $derived(kind === 'ledger' ? 'Ledger' : 'Trezor');
   let manualPath = $state(hdPath(0));
 
   /** Sepolia balances are routinely dust, so an exact zero is stated rather than shown as 0 ETH. */
@@ -31,7 +28,7 @@
 
 <div class="discovery">
   <p class="heading">
-    Accounts on this {deviceName} — {accounts.length} scanned at <code>m/44'/60'/i'/0/0</code>.
+    Accounts on this Ledger — {accounts.length} scanned at <code>m/44'/60'/i'/0/0</code>.
   </p>
 
   <ul class="accounts">
@@ -57,8 +54,8 @@
   <div class="foot">
     <button class="link" onclick={onRescan} disabled={busy}>Scan again</button>
     <span class="manual">
-      <label for="manual-{kind}">Or enter a path</label>
-      <input id="manual-{kind}" type="text" bind:value={manualPath} aria-label="{deviceName} derivation path" />
+      <label for="manual-ledger">Or enter a path</label>
+      <input id="manual-ledger" type="text" bind:value={manualPath} aria-label="Ledger derivation path" />
       <button onclick={() => onManual(manualPath)} disabled={busy}>Use path</button>
     </span>
   </div>

@@ -50,7 +50,7 @@
   import { readCostContext } from '../lib/costs';
   import type { CostContext } from '../lib/costs';
   import { connectInjected } from '../lib/signers/hotWallet';
-  import { readLedgerAddress, readTrezorAddress, scanLedgerPaths, scanTrezorPaths } from '../lib/signers/hardware';
+  import { readLedgerAddress, scanLedgerPaths, pickTrezorAccounts } from '../lib/signers/hardware';
   import { discoveryPaths, pageDiscoveryPaths } from '../lib/signers/discovery';
   import { createPasskey } from '../lib/webauthn';
   import { createInviteLink, decodeSharePayload, parseInviteLink } from '../lib/invite';
@@ -322,29 +322,34 @@
     };
   }
 
-  async function onDeviceAddress(kind: 'ledger' | 'trezor', path: string): Promise<SignerRecord> {
-    if (kind === 'ledger') {
-      return { kind: 'ledger', address: await readLedgerAddress(path), label: 'Ledger', canSign: true, path };
-    }
-    return { kind: 'trezor', address: await readTrezorAddress(path), label: 'Trezor', canSign: true, path };
+  /** Ledger path; Trezor never calls this — its add flow is `onTrezorPick`. */
+  async function onDeviceAddress(path: string): Promise<SignerRecord> {
+    return { kind: 'ledger', address: await readLedgerAddress(path), label: 'Ledger', canSign: true, path };
+  }
+
+  /** Trezor's account picker lives in Suite: one click, user selects, selection returns. */
+  async function onTrezorPick(): Promise<SignerRecord[]> {
+    const picked = await pickTrezorAccounts();
+    return picked.map(({ path, address }) => ({
+      kind: 'trezor',
+      address,
+      label: 'Trezor',
+      canSign: true,
+      path,
+    }));
   }
 
   /**
-   * One device session per scan: both transports hold the device open, so opening
-   * it per account would prompt the user once per row.
+   * One device session per scan — WebHID is held open across the page, so opening
+   * it per account would prompt once per row. Ledger only; Trezor picks in Suite.
    */
-  async function onDeviceScan(kind: 'ledger' | 'trezor'): Promise<{ path: string; address: `0x${string}` }[]> {
-    const paths = discoveryPaths();
-    return kind === 'ledger' ? scanLedgerPaths(paths) : scanTrezorPaths(paths);
+  async function onDeviceScan(): Promise<{ path: string; address: `0x${string}` }[]> {
+    return scanLedgerPaths(discoveryPaths());
   }
 
   /** Paginated variant for the create flow's account-picker modal: ten accounts per page. */
-  async function onDeviceScanPage(
-    kind: 'ledger' | 'trezor',
-    page: number,
-  ): Promise<{ path: string; address: `0x${string}` }[]> {
-    const paths = pageDiscoveryPaths(page);
-    return kind === 'ledger' ? scanLedgerPaths(paths) : scanTrezorPaths(paths);
+  async function onDeviceScanPage(page: number): Promise<{ path: string; address: `0x${string}` }[]> {
+    return scanLedgerPaths(pageDiscoveryPaths(page));
   }
 
   async function onConnectInjected(): Promise<SignerRecord> {
@@ -586,6 +591,7 @@
         onCreatePasskey={onCreatePasskey}
         onDeviceAddress={onDeviceAddress}
         onDeviceScan={onDeviceScanPage}
+        onTrezorPick={onTrezorPick}
         onConnectInjected={onConnectInjected}
         hasSigner={session.current.signers.some((s) => s.canSign)}
         onContinue={() => go(2)}
@@ -700,11 +706,15 @@
         onCreatePasskey={onCreatePasskey}
         onDeviceAddress={onDeviceAddress}
         onDeviceScan={onDeviceScan}
+        onTrezorPick={onTrezorPick}
         onRename={rename}
         onShare={shareSession}
       />
       <div class="nav">
         <button onclick={() => go(0)}>Back</button>
+        {#if thresholdOk}
+          <span class="skip-hint">Owner set already has {session.current.signers.length} {session.current.signers.length === 1 ? 'signer' : 'signers'} — Continue skips adding more.</span>
+        {/if}
         <button class="primary" disabled={!thresholdOk} onclick={() => go(2)}>Continue</button>
       </div>
     {:else if step === 2}
@@ -847,6 +857,12 @@
   .nav {
     display: flex;
     gap: 0.5rem;
+    align-items: center;
+  }
+  .skip-hint {
+    flex: 1;
+    font-size: 0.75rem;
+    color: var(--sf-muted, #666);
   }
   footer {
     border-top: 1px solid #e4e4e4;
