@@ -31,6 +31,8 @@ const haloStub = vi.hoisted(() => ({
 
 vi.mock('../../src/lib/signers/halo', () => ({
   haloAvailable: () => haloStub.available,
+  haloProbe: async () =>
+    haloStub.available ? { ok: true as const, method: 'webnfc' as const } : { ok: false as const, reason: 'stub off' },
   readHaloPublicKey: async () => haloStub.publicKey,
   haloSignerAddress: async () => haloStub.address,
   haloStatusText: (status: string) => `status:${status}`,

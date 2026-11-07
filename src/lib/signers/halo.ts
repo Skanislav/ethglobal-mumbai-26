@@ -32,11 +32,59 @@ export function haloStatusText(status: HaloStatus): string {
 
 type HaloPkeys = { publicKeys?: string[] };
 
-/** NFC is only reachable from a secure context with Web NFC or a bridge. */
+/**
+ * NFC is only reachable from a secure context with Web NFC or a bridge.
+ * Sync truth source for the tile gating; `haloProbe()` gives the async,
+ * cause-labeled answer — it constructs `NDEFReader` exactly the way
+ * libhalo's `detectMethod()` decides between transports, so a browser whose
+ * constructor exists but throws (desktop Chrome exposing a stub, insecure
+ * contexts) is reported precisely instead of as "device has no NFC".
+ */
 export function haloAvailable(): boolean {
   if (typeof window === 'undefined') return false;
   const w = window as unknown as Record<string, unknown>;
-  return typeof w.NDEFReader !== 'undefined' || typeof w.HaloBridge !== 'undefined';
+  if (typeof w.HaloBridge !== 'undefined') return true;
+  try {
+    new (w.NDEFReader as new () => unknown)();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export type HaloProbe = { ok: true; method: 'webnfc' | 'bridge' } | { ok: false; reason: string };
+
+export async function haloProbe(): Promise<HaloProbe> {
+  if (typeof window === 'undefined') return { ok: false, reason: 'not in a browser' };
+  if (!window.isSecureContext) {
+    return { ok: false, reason: 'NFC needs a secure context — open this page over HTTPS' };
+  }
+  if (typeof (window as unknown as Record<string, unknown>).HaloBridge !== 'undefined') {
+    return { ok: true, method: 'bridge' };
+  }
+  const w = window as unknown as Record<string, unknown>;
+  if (typeof w.NDEFReader === 'undefined') {
+    return { ok: false, reason: 'this browser has no Web NFC API (Android Chrome is the one that does)' };
+  }
+  try {
+    new (w.NDEFReader as new () => unknown)();
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `the Web NFC constructor threw: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  let permission = '';
+  try {
+    const q = await navigator.permissions?.query({ name: 'nfc' as PermissionName });
+    permission = q?.state ?? '';
+  } catch {
+    // The query name is not in every browser's registry; absence is not a failure.
+  }
+  if (permission === 'denied') {
+    return { ok: false, reason: 'Web NFC permission is denied for this page — allow it in the browser settings' };
+  }
+  return { ok: true, method: 'webnfc' };
 }
 
 export async function readHaloPublicKey(onStatus?: (s: HaloStatus) => void): Promise<`0x${string}`> {

@@ -4,7 +4,7 @@
   import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
   import { forgetAllEphemeralKeys, storeEphemeralKey } from '../ephemeral';
   import { connectInjected } from '../signers/hotWallet';
-  import { describeHaloFailure, haloAvailable, haloSignerAddress, haloStatusText, readHaloPublicKey } from '../signers/halo';
+  import { describeHaloFailure, haloAvailable, haloProbe, haloSignerAddress, haloStatusText, readHaloPublicKey } from '../signers/halo';
   import { shortAddress } from '../format';
   import type { SignerRecord } from '../signer-types';
   import { describeAccounts, discoveryPaths } from '../signers/discovery';
@@ -53,8 +53,15 @@
 
   const hasInjected = $derived(typeof window !== 'undefined' && Boolean(window.ethereum));
   const hasWebAuthn = $derived(typeof navigator !== 'undefined' && Boolean(navigator.credentials?.create));
-  // HaLo needs Web NFC or the ARX bridge; neither exists in an ordinary desktop browser.
-  const hasNfc = $derived(haloAvailable());
+  // HaLo needs Web NFC or the ARX bridge. The sync gate is optimistic; the probe
+  // below actually constructs NDEFReader (libhalo's own detection) and reports
+  // the precise reason when the constructor exists but throws — which is how
+  // "device doesn't support Web NFC" used to show on phones that have it.
+  let haloProbeResult = $state<{ ok: boolean; reason?: string } | null>(null);
+  const hasNfc = $derived(haloProbeResult ? haloProbeResult.ok : haloAvailable());
+  $effect(() => {
+    void haloProbe().then((probe) => (haloProbeResult = probe));
+  });
   const hasHid = $derived(typeof navigator !== 'undefined' && Boolean((navigator as { hid?: unknown }).hid));
 
   async function addDemo(): Promise<void> {
@@ -266,8 +273,9 @@
       </button>
       {#if !hasNfc}
         <span class="reason unavailable-reason">
-          Web NFC is not available in this browser. Use a compatible device: Chrome on Android,
-          served over HTTPS — then tap the chip to this screen.
+          {haloProbeResult && !haloProbeResult.ok
+            ? haloProbeResult.reason
+            : 'Web NFC is not available in this browser. Use a compatible device: Chrome on Android, served over HTTPS — then tap the chip to this screen.'}
         </span>
       {/if}
       {#if haloStatus}

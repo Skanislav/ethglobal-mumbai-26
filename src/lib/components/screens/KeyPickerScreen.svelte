@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { SignerRecord } from '../../signer-types';
   import { humanError, shortAddress } from '../../format';
-  import { haloSignerAddress, readHaloPublicKey } from '../../signers/halo';
+  import { haloAvailable, haloProbe, haloSignerAddress, readHaloPublicKey } from '../../signers/halo';
   import HdAccountModal from '../HdAccountModal.svelte';
 
   type Choice = 'passkey' | 'halo' | 'injected' | 'hardware';
@@ -44,12 +44,13 @@
   let status = $state('');
 
   const hasWebAuthn = $derived(typeof navigator !== 'undefined' && Boolean(navigator.credentials?.create));
-  // HaLo needs Web NFC or the ARX bridge; neither exists in an ordinary desktop browser.
-  const hasNfc = $derived(
-    typeof window !== 'undefined' &&
-      (typeof (window as unknown as Record<string, unknown>).NDEFReader !== 'undefined' ||
-        typeof (window as unknown as Record<string, unknown>).HaloBridge !== 'undefined'),
-  );
+  // Same probe as SignerStep: construct NDEFReader, don't trust the type check —
+  // a browser can expose the class and still have its constructor throw.
+  let haloProbeResult = $state<{ ok: boolean; reason?: string } | null>(null);
+  const hasNfc = $derived(haloProbeResult ? haloProbeResult.ok : haloAvailable());
+  $effect(() => {
+    void haloProbe().then((probe) => (haloProbeResult = probe));
+  });
   const hasHid = $derived(typeof navigator !== 'undefined' && Boolean((navigator as { hid?: unknown }).hid));
   const hasInjected = $derived(typeof window !== 'undefined' && Boolean(window.ethereum));
 
@@ -137,7 +138,11 @@
     // HaLo needs Web NFC or the ARX bridge; neither exists in an ordinary desktop browser,
     // and a pasted address-only chip can never sign — so scanning is the only path.
     if (!hasNfc) {
-      throw new Error('A HaLo chip needs Web NFC or the ARX bridge — open this on a phone with NFC.');
+      throw new Error(
+        haloProbeResult && !haloProbeResult.ok
+          ? `A HaLo chip needs Web NFC — ${haloProbeResult.reason}.`
+          : 'A HaLo chip needs Web NFC or the ARX bridge — open this on a phone with NFC.',
+      );
     }
     const publicKey = await readHaloPublicKey();
     onAdded({
@@ -238,7 +243,7 @@
 
 <p class="hint">
   {#if choice === 'halo' && !hasNfc}
-    A HaLo chip needs Web NFC — open this on a phone with NFC.
+    {haloProbeResult && !haloProbeResult.ok ? haloProbeResult.reason : 'A HaLo chip needs Web NFC — open this on a phone with NFC.'}
   {:else if choice === 'halo' && hasNfc}
     Tap the chip now — your phone will ask for permission.
   {:else}
