@@ -26,57 +26,84 @@ key is Sepolia-only and holds nothing, the UI keeps a permanent TESTNET-ONLY bad
 is in the owner set, and "Forget demo keys" removes them. A key is never written into an
 exported session, a URL, or any request.
 
-## Sharing a session with a second person
+## Sharing a vault with a second person
 
-The Signers step can publish the current session to a temporary Sepolia EIP-4844 blob and
-hand back a link. The other person opens it, sees the owner set, adds their own signers, and
-deploys — the session continues locally on their machine.
+The Invite screen turns the session into a link. The other person opens it, sees the vault and
+its invited members, adds their own key, and sends a fresh link on to the next person — the
+session continues locally on each machine.
 
-The link is `{origin}{pathname}#/share/{key}/{versionedHash}`. The 32-byte AES-GCM key lives
-in the fragment, which a browser never puts on the wire, so the blob itself (public and
-permanent onchain) stays opaque without it. The blob payload is a versioned envelope
-(`{v: 1, session}`) around the same `encodeSession` string the app stores in
-`localStorage`, so a shared session and a stored one decode through one codec.
+**The link carries the session.** Nothing is published, no fee is paid, and opening a link
+needs no chain access:
 
-Sharing is one hop: the reader's local copy *is* the full session, so sharing again from
-their browser publishes a fresh blob under a fresh key. There is no chaining, no passphrase,
-and no multi-reader history.
+```
+{origin}{pathname}#/invite/<payload>
+payload = base64url( version 0x01 || deflate-raw(compact JSON) )
+```
 
-Publishing is a type-3 transaction from the user's own wallet. The app derives the
-commitment, proof, versioned hash, and sidecars itself and passes them explicitly rather
-than letting viem build the request: viem's JSON-RPC-account path drops `blobVersionedHashes`
-and `sidecars` from `eth_sendTransaction`, which would publish a blob the link's hash does
-not name. Reading the blob back goes through `https://api.sepolia.blobscan.com`, polling
-until the indexer lists it (the poll doubles as the inclusion wait); a link whose blob is
-not indexed yet says so instead of failing silently.
+The payload sits in the fragment, which a browser never puts on the wire, so no request-line
+limit applies and an invite is not sent to any server by opening or sharing it. The guard is
+`MAX_SHARE_URL_LENGTH = 2048`, because that is what chat clients, mail clients and link
+previews behave like. For the record, no RFC sets a URI limit: RFC 9110 has none, and RFC 2616
+§3.2.1 only cautions above 255 bytes — the 2048 figure is IE's 2083 and Apache's request-line
+advice. Taking the smaller number costs nothing and removes the question.
 
-That endpoint answers `200 application/json` with the blob as a **quoted hex string**
-(`"0x00…"`, per its OpenAPI schema: `type: string`, `pattern: ^0x[0-9a-fA-F]+$`), not as raw
-bytes. Reading the response with `arrayBuffer()` yields 262148 bytes of ASCII and every link
-fails to open, so `fetchShareBlob` parses JSON and hex-decodes.
+### Capacity
 
-The data endpoint answers the *same* `404 "No blob data storage URLs found"` for a hash it has
-never seen and for one it knows but cannot serve, so it cannot distinguish them. When it 404s,
-`fetchShareBlob` probes `/blobs/{id}` once: that endpoint 404s `"No blob with versioned hash"`
-only for a hash absent from Sepolia. The two cases need different remedies — republish versus
-wait — so they raise `BlobUnknown` and `BlobUnavailable` respectively. A transport failure
-(`TypeError: Failed to fetch`: offline, DNS, CORS, a blocking extension) raises
-`BlobUnreachable` immediately instead of being retried behind a spinner for a minute.
+A joined owner costs **33.5 characters** (a 20-byte address plus a label, with DEFLATE over the
+lot); an invited name costs a few, because it carries no address; a vault's fixed part is ~124.
 
-**Publishing verifies the receipt, because a wallet can downgrade the request.** A wallet that
-refused `blobVersionedHashes`/`sidecars` used to be retried with `blobs` alone; such a wallet
-can send the payload as ordinary calldata, return a success receipt, and leave the app handing
-back a link to a blob nobody published (observed live: a legacy type-0 self-send, `gasUsed`
-12000, no `blobGasUsed`). That fallback is gone — a wallet that cannot build a type-3
-transaction now fails the publish — and `publishShareBlob` re-reads the receipt and requires
-`type === 'eip4844'` with `blobGasUsed === 131072` before returning any link.
+Lengths vary by a few characters between runs — DEFLATE's block boundaries fall differently
+over high-entropy addresses — so these are ranges, not single values:
 
-Published links are remembered in `localStorage` under `sso.shares.v1` (newest first, 20
-entries max) and listed on the Signers step with copy and forget actions, so a publisher can
-recover a link after closing the tab. This puts the link's AES key on disk, which is
-acceptable only because the blob holds session metadata — owner addresses, labels, threshold,
-a pending transaction — and never key material. The boot line names which step it is waiting
-on, so a slow indexer reads as "Reading the shared session…" rather than appearing stuck.
+| Vault | Link length |
+|---|---|
+| 3 owners, 2 invited names | ~250 |
+| 10 owners | 472–477 |
+| 30 owners | 1137–1145 |
+| 50 owners | 1806–1812 |
+| **57 owners — the ceiling at `https://safelyfy.example/`** | **2038–2046** |
+| 58 owners | over 2048, refused |
+
+So **about 57 joined owners** fit, or far more invited names than a real family has. The exact
+number moves by one owner for every ~33 characters of origin+path: 57 on a 24-character origin,
+56 on a 29-character one. A deployed vault costs slightly more, since its address and salt
+travel too.
+
+`ownersPerLink(origin, pathname)` derives the number from those measured constants, and the
+Invite screen shows it live — the built link reports its own length against the budget:
+
+> 134 of 2048 characters. The link carries the whole vault, so it opens offline; it holds about
+> 56 joined owners, and each extra one costs roughly 33 characters.
+
+`createInviteLink` throws `ShareTooLarge` rather than hand back a link that will arrive
+truncated, and the message says what to do:
+
+> That vault is too big to fit in a link: the link would be 2666 characters, over 2048. Every
+> joined owner adds ~33 characters, so remove a few members and share again.
+
+The separate `MAX_MEMBERS` cap of 128 is a sanity bound that the length limit reaches first, so
+the failure always names the real reason.
+
+`decodeSharePayload` re-validates through `decodeSession`, the same validator every stored
+session passes, so a link can never construct a session the app could not persist. An owner who
+arrives by link is `canSign: false`: the key stayed with whoever holds it, and connecting the
+matching wallet upgrades that record in place.
+
+### Why not EIP-4844 blobs
+
+Blobs were the first design and could not work. Publishing one needs a type-3 transaction;
+ordinary wallets refuse to build one, and a wallet that "accepts" the request can still send the
+payload as ordinary calldata — the publisher pays gas and gets a success receipt for a
+transaction that carried no blob, so the link names something that does not exist. That happened
+in practice here: a legacy type-0 self-send, `gasUsed` 12000, no `blobGasUsed`.
+
+### Why not a Patricia trie
+
+A trie is a key→value structure: each node spends a path element per nibble, so serialising this
+payload that way is several times *larger* than the payload. Measured on a small vault: a 3.2 KB
+lower bound for an MPT versus 947 bytes for plain base64url, and 368 bytes once DEFLATE runs. A
+link needs the smallest representation; integrity comes from validating the decoded session, not
+from trie structure.
 
 ## Signer kinds
 
@@ -214,13 +241,10 @@ resulting CID.
 
 ```sh
 anvil --fork-url https://ethereum-sepolia-rpc.publicnode.com --port 8545 \
-      --hardfork cancun --gas-price 1000000000 --base-fee 1000000000
+      --gas-price 1000000000 --base-fee 1000000000
 cast rpc anvil_setIntervalMining 1 --rpc-url http://127.0.0.1:8545
 RPC_URL=http://127.0.0.1:8545 FORK_PAYER_KEY=0x… bun run test:fork
 ```
-
-`--hardfork cancun` is required for the blob leg; without it the node has no
-`excessBlobGas` and a type-3 transaction cannot be built.
 
 The script drives the app's own modules, three times over:
 
@@ -229,9 +253,9 @@ The script drives the app's own modules, three times over:
 2. Deploys a 1-of-1 Safe and moves it to 2-of-2 with one MultiSend batch
    (`operation` 1) that runs `factory.createSigner` then `addOwnerWithThreshold`,
    then executes a 2-of-2 transaction from the newly installed owner set.
-3. Packs a session into one blob, publishes it as a type-3 transaction, reads the
-   blob back from the node's blob store, and decrypts it to the exact session —
-   plus a refusal check that a foreign key cannot open it.
+3. Encodes a vault to an invite link, decodes it, has the reader join and re-share,
+   and asserts the new link carries both members and the raised threshold. This leg
+   touches no chain: the link is the whole payload.
 
 It closes with two refusals: a single signature cannot execute a 2-of-2 (reverts
 `GS021`), and the client refuses to build `execTransaction` below the threshold.
@@ -254,15 +278,13 @@ Exercised end to end on an anvil fork of Sepolia, through this app's own modules
   followed by a successful 2-of-2 execution.
 - **Refusals.** One signature cannot satisfy a 2-of-2 (reverts `GS021`), and the app
   refuses to build `execTransaction` below the threshold.
-- **Session sharing.** A session is packed (magic + IV + AES-GCM ciphertext), published as
-  a type-3 blob transaction (`blobGasUsed` 131072), read back as raw blob bytes, and
-  decrypted to the exact session the canonical codec produces; a foreign key is refused.
-  In the browser, publishing from the UI produced a working link, and opening that link in
-  a second tab imported the owner set, stripped the fragment (`replaceState` via a shallow
-  `goto`), survived a reload without re-fetching, and then deployed a real Safe at the
-  predicted address. A wrong key and an unindexed blob each surface their own message.
-  The link is remembered in `localStorage`, is still listed after a reload, and its reader
-  path was exercised against a body in the indexer's real JSON-hex wire shape.
+- **Invite links.** A vault encodes to a link that fits 2048 characters for up to 57
+  joined owners, and decodes back with the same vault name, joined owner and pending
+  invitees; owners arriving by link are never signable; a truncated, foreign or
+  oversized payload is refused with its own message. In the browser, the Invite screen
+  built a link with no wallet connected, opening it in a fresh tab imported the vault
+  and stripped the fragment, and re-sharing from that imported session produced a new
+  link carrying the same members.
 - **Live reads.** Pinned deployments verified onchain, ETH/USD read from the Sepolia
   Chainlink feed, gas estimated on the exact calldata at click time.
 

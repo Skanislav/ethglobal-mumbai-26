@@ -11,10 +11,6 @@
   import { describeAccounts, discoveryPaths } from '../signers/discovery';
   import type { DiscoveredAccount } from '../signers/discovery';
   import { privateReads, privateReadsEnabled } from '../privateReads.svelte';
-  import { estimateBlobPublishCost } from '../costs';
-  import type { CostContext } from '../costs';
-  import type { StoredShare } from '../shareLinks';
-  import { formatEth, formatUsd } from '../format';
 
   let {
     signers = [],
@@ -25,9 +21,6 @@
     onDeviceScan,
     onRename,
     onShare,
-    shares = [],
-    onForgetShare,
-    onForgetAllShares,
   }: {
     signers?: SignerRecord[];
     onAdd: (record: SignerRecord) => void;
@@ -37,9 +30,6 @@
     onDeviceAddress: (kind: 'ledger' | 'trezor', path: string) => Promise<SignerRecord>;
     onDeviceScan: (kind: 'ledger' | 'trezor') => Promise<{ path: string; address: `0x${string}` }[]>;
     onShare?: () => Promise<string>;
-    shares?: StoredShare[];
-    onForgetShare?: (versionedHash: `0x${string}`) => void;
-    onForgetAllShares?: () => void;
   } = $props();
 
   let busy = $state<string | null>(null);
@@ -52,7 +42,6 @@
   let ledgerAccounts = $state<DiscoveredAccount[] | null>(null);
   let trezorAccounts = $state<DiscoveredAccount[] | null>(null);
   let shareUrl = $state('');
-  let shareCost = $state<CostContext | null>(null);
 
   /** A friendly default so the field is optional, but two passkeys stay distinguishable. */
   function defaultPasskeyName(): string {
@@ -203,9 +192,6 @@
     shareUrl = '';
     try {
       shareUrl = await onShare();
-      // The cost is read at click time, never remembered: a stale quote is worse
-      // than no quote on a fee that moves per block.
-      shareCost = await estimateBlobPublishCost();
     } catch (err) {
       failure = { kind: 'Share', message: err instanceof Error ? err.message : String(err) };
     } finally {
@@ -374,13 +360,13 @@
       <div class="share">
         <h3>Share this session</h3>
         <p class="hint">
-          Publishes the session to a temporary Sepolia blob and gives you a link. The link's key
-          stays in the fragment, so it is never sent to a server; anyone holding the link can read
-          the session and carry on locally.
+          Encodes the session into the link itself. Nothing is published and no fee is paid: the
+          link's fragment never leaves the browser, and anyone holding it can read the session and
+          carry on locally.
         </p>
         <div class="row">
           <button onclick={share} disabled={busy === 'share' || signers.length === 0}>
-            {busy === 'share' ? 'Publishing the blob…' : 'Share session via blob'}
+            {busy === 'share' ? 'Building the link…' : 'Share session as a link'}
           </button>
           <button onclick={copyShareLink} disabled={!shareUrl}>Copy</button>
         </div>
@@ -393,45 +379,8 @@
             aria-label="Shareable session link"
             onfocus={(event) => event.currentTarget.select()}
           />
-          {#if shareCost}
-            {#if shareCost.status === 'ready'}
-              <p class="hint">
-                Publish cost: ≈ {formatEth(shareCost.gas.feeWei)} ETH
-                {#if shareCost.price}(≈ {formatUsd(shareCost.gas.feeWei, shareCost.price.usd)}){/if},
-                read from the live blob base fee.
-              </p>
-            {:else}
-              <p class="hint">Publish cost unavailable: {shareCost.reason}</p>
-            {/if}
-          {/if}
         {/if}
 
-        {#if shares.length > 0}
-          <h4>Links from this browser ({shares.length})</h4>
-          <ul class="share-list">
-            {#each shares as entry (entry.versionedHash)}
-              <li>
-                <div class="share-meta">
-                  <span>{new Date(entry.createdAt).toLocaleString()}</span>
-                  <span>{entry.signerCount} signer{entry.signerCount === 1 ? '' : 's'}, {entry.threshold} of {entry.signerCount}</span>
-                </div>
-                <input
-                  type="text"
-                  class="share-link"
-                  readonly
-                  value={entry.url}
-                  aria-label="Saved share link"
-                  onfocus={(event) => event.currentTarget.select()}
-                />
-                <div class="row">
-                  <button class="link" onclick={() => copyText(entry.url)}>Copy</button>
-                  <button class="link" onclick={() => onForgetShare?.(entry.versionedHash)}>Forget</button>
-                </div>
-              </li>
-            {/each}
-          </ul>
-          <button class="link" onclick={() => onForgetAllShares?.()}>Forget all links</button>
-        {/if}
       </div>
     {/if}
     <p class="hint">
@@ -596,29 +545,5 @@
     border-radius: 6px;
     width: 100%;
     box-sizing: border-box;
-  }
-  .share h4 {
-    margin: 0.25rem 0 0;
-    font-size: 0.8125rem;
-    color: #444;
-  }
-  .share-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    gap: 0.6rem;
-  }
-  .share-list li {
-    display: grid;
-    gap: 0.25rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid #ececec;
-  }
-  .share-meta {
-    display: flex;
-    gap: 0.75rem;
-    font-size: 0.75rem;
-    color: #666;
   }
 </style>

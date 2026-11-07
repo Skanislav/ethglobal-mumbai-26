@@ -5,18 +5,12 @@
 
 import Safe, { EthSafeSignature, buildSignatureBytes } from '@safe-global/protocol-kit';
 import {
-  blobsToCommitments,
-  blobsToProofs,
-  commitmentsToVersionedHashes,
   encodeFunctionData,
   getAddress,
   isAddress,
   parseAbi,
-  toBlobSidecars,
 } from 'viem';
-import type { Hex } from 'viem';
 import { CONTRACT_NETWORKS, DEPLOYMENTS, RPC_URL, SAFE_VERSION, assertSepolia } from './chains';
-import { getKzg } from './kzg';
 import { encodeCreateSigner } from './passkeyFactory';
 import type { PendingSignature, PendingTx } from './session';
 import type { PasskeyCoordinates } from './webauthn';
@@ -282,81 +276,4 @@ export function execTransactionCall(
 export async function assertIsOwner(safeAddress: `0x${string}`, owner: `0x${string}`): Promise<void> {
   const { owners } = await readExistingSafe(safeAddress);
   if (!owners.some((o) => o.toLowerCase() === owner.toLowerCase())) throw new NotAnOwner(owner);
-}
-
-export class BlobPublishRejected extends Error {
-  constructor(detail: string) {
-    super(`BlobPublishRejected: ${detail}`);
-    this.name = 'BlobPublishRejected';
-  }
-}
-
-export type SharePublish = { txHash: Hex; versionedHash: `0x${string}` };
-
-/**
- * Publishes one blob as a type-3 transaction from the user's wallet. The wallet
- * only signs and broadcasts — every derived quantity (commitment, proof,
- * versioned hash, sidecars) is computed here, because a wallet that derived its
- * own from `blobs` would publish a blob the link's hash does not name.
- *
- * The request is hand-built rather than routed through `createWalletClient`:
- * viem's JSON-RPC-account path drops `blobVersionedHashes`, `sidecars`, and `kzg`
- * from `eth_sendTransaction` (verified against viem 2.57.16), which would send a
- * blob transaction with no hashes at all.
- */
-export async function publishShareBlob(blobHex: `0x${string}`): Promise<SharePublish> {
-  const conn = await connectInjected('Share session via blob');
-  await requireSepolia(conn.provider);
-
-  const kzg = await getKzg();
-  const blobs = [blobHex] as const;
-  const commitments = blobsToCommitments({ blobs, kzg });
-  const proofs = blobsToProofs({ blobs, commitments, kzg });
-  const sidecars = toBlobSidecars({ blobs, commitments, proofs });
-  const versionedHashes = commitmentsToVersionedHashes({ commitments });
-  const maxFeePerBlobGas = (await sepoliaPublicClient.getBlobBaseFee()) * 2n;
-
-  const request = {
-    from: conn.address,
-    // Blob transactions carry no calldata here: it is a self-send of zero value
-    // whose only content is the blob.
-    to: conn.address,
-    value: '0x0',
-    type: '0x3',
-    maxFeePerBlobGas: `0x${maxFeePerBlobGas.toString(16)}`,
-    blobs,
-  };
-  const send = (params: unknown) => conn.provider.request({ method: 'eth_sendTransaction', params: [params] });
-
-  // No fallback that drops `blobVersionedHashes` and `sidecars`. A wallet that
-  // rejects them cannot publish this blob, and retrying with `blobs` alone lets a
-  // wallet send the payload as calldata: the user pays, gets a success receipt,
-  // and the link names a blob that was never published. Failing here is the only
-  // honest outcome.
-  let hash: unknown;
-  try {
-    hash = await send({ ...request, blobVersionedHashes: versionedHashes, sidecars });
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new BlobPublishRejected(
-      `the wallet refused the blob request (${detail}). It must support EIP-4844 type-3 transactions; a wallet that does not cannot publish a session`,
-    );
-  }
-  if (typeof hash !== 'string') throw new BlobPublishRejected('the wallet returned no transaction hash');
-
-  const txHash = hash as Hex;
-  const receipt = await waitForReceipt(txHash);
-  if (receipt.status !== 'success') throw new BlobPublishRejected('the blob transaction reverted');
-  // The receipt is the only proof the blob was actually carried. A wallet that
-  // silently downgraded the request still reports a success receipt, so checking
-  // the hash alone would hand back a link to a blob nobody has.
-  if (receipt.type !== 'eip4844') {
-    throw new BlobPublishRejected(
-      `the wallet sent a ${receipt.type} transaction instead of a blob transaction, so nothing was published`,
-    );
-  }
-  if (receipt.blobGasUsed !== undefined && receipt.blobGasUsed !== 131_072n) {
-    throw new BlobPublishRejected(`the transaction carried ${receipt.blobGasUsed} blob gas, expected 131072`);
-  }
-  return { txHash, versionedHash: versionedHashes[0] };
 }

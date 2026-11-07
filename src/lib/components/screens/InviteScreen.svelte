@@ -1,8 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { avatarClass, formatEth, formatUsd, initial, humanError, memberSubtitle } from '../../format';
-  import { estimateBlobPublishCost } from '../../costs';
-  import type { CostContext } from '../../costs';
+  import { avatarClass, initial, humanError, memberSubtitle } from '../../format';
+  import { MAX_SHARE_URL_LENGTH, ownersPerLink } from '../../invite';
   import { memberJoinState } from '../../session';
   import type { Session } from '../../session';
 
@@ -17,43 +16,34 @@
     onNext,
   }: {
     session: Session;
-    /** Already-published link for this exact session; the parent caches it. */
+    /** The link built for this exact session; the parent caches it. */
     inviteUrl?: string;
     vaultName?: string;
     onVaultName: (name: string) => void;
-    /** Publishes the session and returns the invite link; may need a wallet. */
+    /** Encodes the session into a link; needs no wallet. */
     onPublish?: () => Promise<string>;
     onAddPlanned: (name: string) => void;
     onRemovePlanned: (name: string) => void;
     onNext: () => void;
   } = $props();
 
-  let shareCost = $state<CostContext | null>(null);
   let sharing = $state(false);
   let failure = $state('');
   let copied = $state(false);
   let newName = $state('');
-  let needsWallet = $state(false);
 
   const roster = $derived(memberJoinState(session));
   const joined = $derived(roster.filter((m) => m.joined).length);
   const canAdvance = $derived(session.signers.some((s) => s.canSign));
+  // Depends on this deployment's origin+path, so it is derived at runtime.
+  const capacity = $derived(
+    typeof location === 'undefined' ? 0 : ownersPerLink(location.origin, location.pathname),
+  );
 
   onMount(() => {
-    // Publishing is a blob transaction, so it only runs unprompted when a wallet is
-    // already authorized; otherwise the box says what it needs and the click prompts.
-    void (async () => {
-      if (!onPublish || inviteUrl) return;
-      const eth = typeof window === 'undefined' ? undefined : window.ethereum;
-      let accounts: unknown = [];
-      try {
-        accounts = eth ? await eth.request({ method: 'eth_accounts' }) : [];
-      } catch {
-        accounts = [];
-      }
-      if (Array.isArray(accounts) && accounts.length > 0) await share();
-      else needsWallet = true;
-    })();
+    // The link carries the session itself, so there is nothing to publish and no
+    // wallet to wait for: build it as soon as the screen appears.
+    void share();
   });
 
   async function share(): Promise<void> {
@@ -63,11 +53,8 @@
     copied = false;
     try {
       await onPublish();
-      // Cost is read after the publish, when the payer wallet is already connected.
-      shareCost = await estimateBlobPublishCost();
     } catch (err) {
       failure = humanError(err);
-      needsWallet = true;
     } finally {
       sharing = false;
     }
@@ -116,19 +103,16 @@
     </div>
   {:else}
     {#if sharing}
-      <p class="pending">Publishing the invite to Sepolia…</p>
+      <p class="pending">Building the invite link…</p>
     {:else if !failure}
-      <p class="pending">
-        {needsWallet
-          ? 'Connect a wallet on Sepolia to publish the invite link.'
-          : 'Invite link not published yet.'}
-      </p>
+      <p class="pending">Invite link not built yet.</p>
     {/if}
   {/if}
-  {#if shareCost?.status === 'ready'}
-    <p class="cost">
-      Publish cost ≈ {formatEth(shareCost.gas.feeWei)} ETH
-      {#if shareCost.price}(≈ {formatUsd(shareCost.gas.feeWei, shareCost.price.usd)}){/if}
+  {#if inviteUrl}
+    <p class="budget">
+      {inviteUrl.length} of {MAX_SHARE_URL_LENGTH} characters. The link carries the whole vault,
+      so it opens offline; it holds about {capacity} joined owners, and each extra one costs
+      roughly 33 characters.
     </p>
   {/if}
   {#if failure}
@@ -177,7 +161,7 @@
 
 <div class="cta">
   <button class="sf-btn" onclick={inviteUrl ? copy : share} disabled={sharing || !onPublish}>
-    {sharing ? 'Publishing…' : inviteUrl ? 'Share invite link' : 'Connect a wallet and publish'}
+    {sharing ? 'Building…' : inviteUrl ? 'Share invite link' : 'Build invite link'}
   </button>
   <button class="sf-btn sf-btn--ghost" onclick={onNext} disabled={!canAdvance}>Next: approval rule</button>
   {#if !canAdvance}
@@ -255,10 +239,16 @@
     color: var(--sf-muted);
   }
 
-  .cost,
   .hint {
     margin: 0;
     font-size: 0.75rem;
+    color: var(--sf-muted);
+  }
+
+  .budget {
+    margin: 0;
+    font-size: 0.75rem;
+    line-height: 1.4;
     color: var(--sf-muted);
   }
 

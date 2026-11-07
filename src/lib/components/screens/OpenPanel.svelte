@@ -42,7 +42,7 @@
       return;
     }
     // A Safe address is validated here so an ENS name or a typo never reaches the RPC.
-    if (!/^https?:|#\/share\//.test(value)) {
+    if (!/^https?:|#\/invite\//.test(value)) {
       const rejection = addressRejection(value);
       if (rejection) {
         failure = rejection;
@@ -51,7 +51,7 @@
     }
     busy = true;
     try {
-      await onOpen(/^https?:|#\/share\//.test(value) ? value : checksum(value));
+      await onOpen(/^https?:|#\/invite\//.test(value) ? value : checksum(value));
     } catch (err) {
       // Named blob/session errors carry the actionable sentence; a bare Error is the
       // page's own validation message and reads correctly as-is.
@@ -70,7 +70,7 @@
     <input
       id="open-value"
       type="text"
-      placeholder="https://…/#/share/… or 0x…"
+      placeholder="https://…/#/invite/… or 0x…"
       bind:value={input}
       oninput={() => (failure = '')}
     />
