@@ -33,6 +33,15 @@ export function discoveryPaths(count = DISCOVERY_ACCOUNTS): string[] {
   return Array.from({ length: count }, (_, account) => hdPath(account));
 }
 
+/** The account indexes shown in the picker on one page. */
+export const HD_PAGE_SIZE = 10;
+
+/** Paths for one page of accounts, e.g. page 0 → accounts 0..9. */
+export function pageDiscoveryPaths(page: number, size = HD_PAGE_SIZE): string[] {
+  const start = page * size;
+  return Array.from({ length: size }, (_, i) => hdPath(start + i));
+}
+
 /**
  * Decorates raw device results with the two facts that make a list pickable:
  * whether the account holds Sepolia ETH, and whether it is already an owner.

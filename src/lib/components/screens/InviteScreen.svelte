@@ -1,13 +1,15 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { avatarClass, initial, humanError, memberSubtitle } from '../../format';
+  // The invite link is a self-contained URL fragment — no wallet, no publish fee.
+  import { humanError } from '../../format';
   import { MAX_SHARE_URL_LENGTH, ownersPerLink } from '../../invite';
-  import { memberJoinState } from '../../session';
+  import { memberGroups } from '../../session';
   import type { Session } from '../../session';
+  import MemberGroups from '../MemberGroups.svelte';
 
   let {
     session,
     inviteUrl = '',
+    shareError = '',
     vaultName = '',
     onVaultName,
     onPublish,
@@ -16,11 +18,13 @@
     onNext,
   }: {
     session: Session;
-    /** The link built for this exact session; the parent caches it. */
+    /** Link for this exact session; the parent keeps it current via a debounced effect. */
     inviteUrl?: string;
+    /** Set when regenerating the link failed (e.g. payload too large). */
+    shareError?: string;
     vaultName?: string;
     onVaultName: (name: string) => void;
-    /** Encodes the session into a link; needs no wallet. */
+    /** Rebuilds the link by hand; the parent normally keeps it current automatically. */
     onPublish?: () => Promise<string>;
     onAddPlanned: (name: string) => void;
     onRemovePlanned: (name: string) => void;
@@ -32,19 +36,14 @@
   let copied = $state(false);
   let newName = $state('');
 
-  const roster = $derived(memberJoinState(session));
-  const joined = $derived(roster.filter((m) => m.joined).length);
+  const groups = $derived(memberGroups(session));
+  const joined = $derived(groups.filter((m) => m.joined).length);
   const canAdvance = $derived(session.signers.some((s) => s.canSign));
   // Depends on this deployment's origin+path, so it is derived at runtime.
   const capacity = $derived(
     typeof location === 'undefined' ? 0 : ownersPerLink(location.origin, location.pathname),
   );
 
-  onMount(() => {
-    // The link carries the session itself, so there is nothing to publish and no
-    // wallet to wait for: build it as soon as the screen appears.
-    void share();
-  });
 
   async function share(): Promise<void> {
     if (!onPublish) return;
@@ -101,51 +100,32 @@
       <input class="link" type="text" readonly value={inviteUrl} onfocus={(e) => e.currentTarget.select()} />
       <button class="sf-btn sf-btn--quiet" onclick={copy}>{copied ? 'Copied' : 'Copy'}</button>
     </div>
-  {:else}
-    {#if sharing}
-      <p class="pending">Building the invite link…</p>
-    {:else if !failure}
-      <p class="pending">Invite link not built yet.</p>
-    {/if}
+  {:else if sharing}
+    <p class="pending">Building your invite link…</p>
+  {:else if !failure && !shareError}
+    <p class="pending">Building your invite link…</p>
   {/if}
   {#if inviteUrl}
     <p class="budget">
-      {inviteUrl.length} of {MAX_SHARE_URL_LENGTH} characters. The link carries the whole vault,
-      so it opens offline; it holds about {capacity} joined owners, and each extra one costs
-      roughly 33 characters.
+      {inviteUrl.length} of {MAX_SHARE_URL_LENGTH} characters. The link carries the whole
+      vault, so it opens offline; it holds about {capacity} joined owners, and each extra
+      one costs roughly 33 characters.
     </p>
   {/if}
   {#if failure}
     <p class="error">{failure}</p>
+  {/if}
+  {#if shareError}
+    <p class="error">{shareError}</p>
   {/if}
 </div>
 
 <div class="roster">
   <div class="head">
     <h2>Family members</h2>
-    <span class="sf-muted">{joined} of {roster.length} joined</span>
+    <span class="sf-muted">{joined} of {groups.length} joined</span>
   </div>
-  <ul>
-    {#each roster as member, index (member.name + index)}
-      <li>
-        <span class="sf-avatar {avatarClass(index)}">{initial(member.name)}</span>
-        <span class="who">
-          <span class="name">{member.name}</span>
-          <span class="sub">{memberSubtitle(member)}</span>
-        </span>
-        {#if member.joined}
-          <span class="sf-chip sf-chip--ok">Joined</span>
-        {:else}
-          <span class="sf-chip sf-chip--warn">Invited</span>
-          {#if member.planned}
-            <button class="remove" onclick={() => onRemovePlanned(member.name)} aria-label="Remove {member.name}">
-              ×
-            </button>
-          {/if}
-        {/if}
-      </li>
-    {/each}
-  </ul>
+  <MemberGroups {groups} threshold={session.threshold} {onRemovePlanned} />
 
   <form
     class="add"
@@ -161,7 +141,7 @@
 
 <div class="cta">
   <button class="sf-btn" onclick={inviteUrl ? copy : share} disabled={sharing || !onPublish}>
-    {sharing ? 'Building…' : inviteUrl ? 'Share invite link' : 'Build invite link'}
+    {sharing ? 'Building…' : inviteUrl ? 'Share invite link' : 'Create invite link'}
   </button>
   <button class="sf-btn sf-btn--ghost" onclick={onNext} disabled={!canAdvance}>Next: approval rule</button>
   {#if !canAdvance}
@@ -272,49 +252,6 @@
   h2 {
     margin: 0;
     font-size: 0.95rem;
-  }
-
-  .roster ul {
-    display: grid;
-    gap: 0.4rem;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .roster li {
-    display: flex;
-    align-items: center;
-    gap: 0.65rem;
-    padding: 0.6rem 0.7rem;
-    border: 1px solid var(--sf-line);
-    border-radius: var(--sf-radius-md);
-    background: var(--sf-surface);
-  }
-
-  .who {
-    display: grid;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .name {
-    font-weight: 600;
-    font-size: 0.9375rem;
-  }
-
-  .sub {
-    color: var(--sf-muted);
-    font-size: 0.75rem;
-  }
-
-  .remove {
-    padding: 0 0.2rem;
-    border: none;
-    background: none;
-    color: var(--sf-muted);
-    font-size: 1rem;
-    cursor: pointer;
   }
 
   .add {

@@ -217,6 +217,49 @@ export function memberJoinState(session: Session): MemberRow[] {
   return rows;
 }
 
+/** One roster row per *member*, with that member's devices nested. */
+export type MemberGroup = {
+  name: string;
+  joined: boolean;
+  planned: boolean;
+  /** Signer-backed rows, in insertion order. */
+  devices: MemberRow[];
+};
+
+/**
+ * memberJoinState, but one row per *member* with their devices nested. Joined
+ * members may hold several signers (two hardware wallets, a passkey + a chip);
+ * invited-but-unjoined members have an empty `devices` list.
+ *
+ * A planned slot matches a signer by address; the slot's *name* wins as the
+ * group name when a linked planned member has joined. Two members sharing a name
+ * fold into one group — names are labels, not keys, and MAX_MEMBERS bounds the fold.
+ */
+export function memberGroups(session: Session): MemberGroup[] {
+  const planned = session.plannedMembers ?? [];
+  const groups = new Map<string, MemberGroup>(); // key: display name
+  for (const signer of session.signers) {
+    const slot = planned.find((m) => m.address && sameAddress(m.address, signer.address));
+    const name = slot?.name ?? signer.label;
+    const row: MemberRow = {
+      name,
+      joined: true,
+      address: signer.address,
+      kind: signer.kind,
+      planned: false,
+    };
+    const existing = groups.get(name);
+    if (existing) existing.devices.push(row);
+    else groups.set(name, { name, joined: true, planned: false, devices: [row] });
+  }
+  const owners = new Set(session.signers.map((s) => (s.address as string).toLowerCase()));
+  for (const slot of planned) {
+    if (slot.address && owners.has(slot.address.toLowerCase())) continue; // already in a joined group
+    groups.set(slot.name, { name: slot.name, joined: false, planned: true, devices: [] });
+  }
+  return [...groups.values()];
+}
+
 export function setThreshold(session: Session, n: number): Session {
   const max = Math.max(session.signers.length, 1);
   const threshold = Math.min(Math.max(Math.trunc(Number.isFinite(n) ? n : 1), 1), max);

@@ -1,9 +1,8 @@
 <script lang="ts">
-  import { getAddress } from 'viem';
-  import { DEFAULT_HD_PATH } from '../../signer-types';
   import type { SignerRecord } from '../../signer-types';
   import { haloSignerAddress, readHaloPublicKey } from '../../signers/halo';
   import { humanError } from '../../format';
+  import HdAccountModal from '../HdAccountModal.svelte';
 
   type Choice = 'passkey' | 'halo' | 'injected' | 'hardware';
 
@@ -11,25 +10,36 @@
     onAdded,
     onCreatePasskey,
     onDeviceAddress,
+    onDeviceScan,
     onConnectInjected,
     hasSigner = false,
     onContinue,
+    plannedRule,
+    sessionSigners = [],
   }: {
     /** Receives the record the chosen key produced; the parent stores and advances. */
     onAdded: (record: SignerRecord) => void;
     onCreatePasskey: (label: string) => Promise<SignerRecord>;
     onDeviceAddress: (kind: 'ledger' | 'trezor', path: string) => Promise<SignerRecord>;
+    /** Scans one page of HD accounts on the device; powers the account-picker modal. */
+    onDeviceScan?: (
+      kind: 'ledger' | 'trezor',
+      page: number,
+    ) => Promise<{ path: string; address: `0x${string}` }[]>;
     onConnectInjected?: () => Promise<SignerRecord>;
     /** A signable owner already exists, so the screen offers "Continue" without adding another. */
     hasSigner?: boolean;
     onContinue?: () => void;
+    /** The approval rule the invite link carried, shown read-only to an invited joiner. */
+    plannedRule?: { threshold: number; ownerCount: number };
+    /** Current signers; the account modal marks which scanned accounts are already owners. */
+    sessionSigners?: SignerRecord[];
   } = $props();
 
   let choice = $state<Choice | null>(null);
   let device = $state<'ledger' | 'trezor'>('ledger');
-  let path = $state(DEFAULT_HD_PATH);
   let passkeyName = $state('');
-  let haloAddress = $state('');
+  let modalOpen = $state(false);
   let busy = $state(false);
   let status = $state('');
 
@@ -102,7 +112,9 @@
         if (!onConnectInjected) throw new Error('WalletUnavailable: no connect handler');
         onAdded(await onConnectInjected());
       } else if (choice === 'hardware') {
-        onAdded(await onDeviceAddress(device, path));
+        // Accounts are picked inside the modal, which adds them itself.
+        if (!onDeviceScan) throw new Error('WalletUnavailable: no scan handler');
+        modalOpen = true;
       } else {
         await addChip();
       }
@@ -115,28 +127,39 @@
 
   /** NFC tap derives the address *and* keeps the public key, so the chip can sign later. */
   async function addChip(): Promise<void> {
-    if (hasNfc) {
-      const publicKey = await readHaloPublicKey();
-      onAdded({
-        kind: 'halo',
-        address: await haloSignerAddress(publicKey),
-        label: 'HaLo chip',
-        canSign: true,
-        publicKey,
-      });
-      return;
+    // HaLo needs Web NFC or the ARX bridge; neither exists in an ordinary desktop browser,
+    // and a pasted address-only chip can never sign — so scanning is the only path.
+    if (!hasNfc) {
+      throw new Error('A HaLo chip needs Web NFC or the ARX bridge — open this on a phone with NFC.');
     }
-    const value = haloAddress.trim();
-    if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
-      throw new Error('Paste the 42-character hex address from the chip, or open this on a phone with NFC.');
-    }
-    onAdded({ kind: 'halo', address: getAddress(value), label: 'HaLo chip (address only)', canSign: false });
-    haloAddress = '';
+    const publicKey = await readHaloPublicKey();
+    onAdded({
+      kind: 'halo',
+      address: await haloSignerAddress(publicKey),
+      label: 'HaLo chip',
+      canSign: true,
+      publicKey,
+    });
   }
 </script>
 
 <h1>Add your key</h1>
-<p class="lede">Choose how you'll approve payments. Use what you already have.</p>
+<p class="lede">Choose how you'll approve payments. Add as many keys as you like — passkey, chip, wallet, hardware.</p>
+
+{#if plannedRule}
+  <span class="sf-chip">Planned rule: {plannedRule.threshold}-of-{plannedRule.ownerCount} approvals</span>
+{/if}
+
+{#if sessionSigners.length > 0}
+  <ul class="added">
+    {#each sessionSigners as signer (signer.address)}
+      <li>
+        <span class="added-name">{signer.label}</span>
+        <span class="sf-chip sf-chip--ok">Added</span>
+      </li>
+    {/each}
+  </ul>
+{/if}
 
 <ul class="tiles">
   {#each tiles as tile (tile.id)}
@@ -197,16 +220,8 @@
         Trezor
       </button>
     </div>
-    <label class="field">
-      <span>Derivation path</span>
-      <input type="text" bind:value={path} />
-    </label>
+    <p class="hint-left">Continue opens the account picker — you can add several accounts in a row.</p>
   </div>
-{:else if choice === 'halo' && !hasNfc}
-  <label class="field">
-    <span>Paste the chip address</span>
-    <input type="text" placeholder="0x… chip address" bind:value={haloAddress} />
-  </label>
 {/if}
 
 {#if status}
@@ -214,7 +229,9 @@
 {/if}
 
 <p class="hint">
-  {#if choice === 'halo' && hasNfc}
+  {#if choice === 'halo' && !hasNfc}
+    A HaLo chip needs Web NFC — open this on a phone with NFC.
+  {:else if choice === 'halo' && hasNfc}
     Tap the chip now — your phone will ask for permission.
   {:else}
     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -230,9 +247,19 @@
     {busy ? 'Waiting for your key…' : label}
   </button>
   {#if hasSigner && onContinue}
-    <button class="sf-btn sf-btn--ghost" onclick={onContinue}>Use the key I already added</button>
+    <button class="sf-btn sf-btn--ghost" onclick={onContinue}>Next: invite your family</button>
   {/if}
 </div>
+
+{#if modalOpen && onDeviceScan}
+  <HdAccountModal
+    kind={device}
+    owners={sessionSigners}
+    onScan={onDeviceScan}
+    onAdd={onDeviceAddress}
+    onClose={() => (modalOpen = false)}
+  />
+{/if}
 
 <style>
   h1 {
@@ -361,6 +388,36 @@
   .row {
     display: flex;
     gap: 0.5rem;
+  }
+
+  .added {
+    display: grid;
+    gap: 0.35rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .added li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.45rem 0.65rem;
+    border: 1px solid var(--sf-line);
+    border-radius: var(--sf-radius-md);
+    background: var(--sf-surface);
+  }
+
+  .added-name {
+    font-weight: 600;
+    font-size: 0.875rem;
+  }
+
+  .hint-left {
+    margin: 0;
+    color: var(--sf-muted);
+    font-size: 0.75rem;
   }
 
   .pick-on {

@@ -1,25 +1,26 @@
 <script lang="ts">
-  import { avatarClass, initial, joinNames } from '../../format';
-  import type { MemberRow } from '../../session';
+  import { joinNames } from '../../format';
+  import { memberGroups } from '../../session';
+  import type { Session } from '../../session';
+  import MemberGroups from '../MemberGroups.svelte';
 
   let {
-    vaultName,
-    roster,
+    session,
     threshold,
     signerCount,
     onOpenVault,
     onTestPayment,
   }: {
-    vaultName?: string;
-    roster: MemberRow[];
+    session: Session;
     threshold: number;
     signerCount: number;
     onOpenVault: () => void;
     onTestPayment?: () => void;
   } = $props();
 
-  const joinedNames = $derived(roster.filter((m) => m.joined).map((m) => m.name));
-  const invitedCount = $derived(roster.length - joinedNames.length);
+  const groups = $derived(memberGroups(session));
+  const joinedNames = $derived(groups.filter((m) => m.joined).map((m) => m.name));
+  const invitedCount = $derived(groups.length - joinedNames.length);
 </script>
 
 <div class="ready">
@@ -29,7 +30,7 @@
     </svg>
   </span>
 
-  <h1>{vaultName || 'Your family vault'} is ready</h1>
+  <h1>{session.vaultName || 'Your family vault'} is ready</h1>
   <p class="lede">
     {#if invitedCount === 0}
       {joinNames(joinedNames)} {joinedNames.length === 1 ? 'is' : 'are'} all in. Any {threshold} of you can approve a
@@ -41,10 +42,8 @@
     {/if}
   </p>
 
-  <div class="faces">
-    {#each roster as member, index (member.name + index)}
-      <span class="sf-avatar {avatarClass(index)}">{initial(member.name)}</span>
-    {/each}
+  <div class="faces-wrap">
+    <MemberGroups {groups} variant="faces" />
   </div>
 
   <span class="sf-chip">
@@ -58,7 +57,7 @@
 </div>
 
 <div class="cta">
-  <button class="sf-btn" onclick={onOpenVault}>Open the vault</button>
+  <button class="sf-btn" onclick={onOpenVault}>Next: open your vault</button>
   {#if onTestPayment}
     <button class="sf-btn sf-btn--ghost" onclick={onTestPayment}>Send a test payment</button>
   {/if}
@@ -99,9 +98,9 @@
     max-width: 26ch;
   }
 
-  .faces {
+  .faces-wrap {
     display: flex;
-    gap: 0.35rem;
+    justify-content: center;
   }
 
   .cta {

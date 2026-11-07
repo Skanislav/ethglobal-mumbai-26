@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { avatarClass, formatEth, initial, shortAddress, humanError, memberSubtitle } from '../../format';
-  import { memberJoinState } from '../../session';
+  import { formatEth, shortAddress, humanError } from '../../format';
+  import { memberGroups } from '../../session';
   import type { Session } from '../../session';
+  import MemberGroups from '../MemberGroups.svelte';
+  import { getAddress } from 'viem';
 
   let {
     session,
@@ -13,7 +15,7 @@
   }: {
     session: Session;
     balanceWei: bigint | null;
-    /** Cached invite link for this session, published once by the parent. */
+    /** Invite link for this session, kept current by the parent's debounced effect. */
     inviteUrl?: string;
     onSend: () => void;
     onInvite?: () => Promise<string>;
@@ -25,8 +27,23 @@
   let failure = $state('');
   let inviting = $state(false);
 
-  const roster = $derived(memberJoinState(session));
+  const groups = $derived(memberGroups(session));
   const address = $derived(session.safeAddress ?? '');
+
+  /** The Safe web app's new-transaction builder for this vault on Sepolia. */
+  const safeAppUrl = $derived(
+    address ? `https://app.safe.global/new-tx/tx-builder?safe=sep:${getAddress(address)}` : '',
+  );
+
+  /**
+   * Sending happens in the Safe app (new tab) once the vault has an address; a
+   * pre-deploy session has nothing to deep-link to and falls back to the in-app
+   * test-payment step.
+   */
+  function openSafeApp(): void {
+    if (safeAppUrl) window.open(safeAppUrl, '_blank', 'noopener,noreferrer');
+    else onSend();
+  }
 
   async function showInvite(): Promise<void> {
     panel = 'invite';
@@ -59,12 +76,7 @@
     <h1>{session.vaultName || 'Untitled vault'}</h1>
   </div>
   <div class="faces">
-    {#each roster.slice(0, 3) as member, index (member.name + index)}
-      <span class="sf-avatar {avatarClass(index)}">{initial(member.name)}</span>
-    {/each}
-    {#if roster.length > 3}
-      <span class="sf-avatar more">+{roster.length - 3}</span>
-    {/if}
+    <MemberGroups {groups} variant="faces" limit={3} />
   </div>
 </header>
 
@@ -90,7 +102,7 @@
 </section>
 
 <div class="actions">
-  <button class="action" onclick={onSend}>
+  <button class="action" onclick={openSafeApp}>
     <span class="icon" aria-hidden="true">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M7 17 17 7M9 7h8v8" stroke-linecap="round" stroke-linejoin="round" />
@@ -135,14 +147,14 @@
   <div class="panel sf-card">
     <span class="label">Invite link</span>
     {#if inviting}
-      <p class="sf-muted">Publishing the invite to Sepolia…</p>
+      <p class="sf-muted">Building your invite link…</p>
     {:else if inviteUrl}
       <input class="link" type="text" readonly value={inviteUrl} onfocus={(e) => e.currentTarget.select()} />
       <button class="sf-btn sf-btn--quiet" onclick={() => copy(inviteUrl)}>
         {copied === inviteUrl ? 'Copied' : 'Copy link'}
       </button>
     {:else}
-      <p class="sf-muted">Connect a wallet on Sepolia to publish the invite link.</p>
+      <p class="sf-muted">The link builds itself in a moment — every change is baked straight in.</p>
     {/if}
     {#if failure}<p class="error">{failure}</p>{/if}
   </div>
@@ -155,22 +167,7 @@
       <button class="refresh" onclick={onRefresh}>Refresh</button>
     {/if}
   </div>
-  <ul>
-    {#each roster as member, index (member.name + index)}
-      <li>
-        <span class="sf-avatar {avatarClass(index)}">{initial(member.name)}</span>
-        <span class="who">
-          <span class="name">{member.name}</span>
-          <span class="sub">{memberSubtitle(member)}</span>
-        </span>
-        {#if member.joined}
-          <span class="sf-chip sf-chip--ok">Joined</span>
-        {:else}
-          <span class="sf-chip sf-chip--warn">Invited</span>
-        {/if}
-      </li>
-    {/each}
-  </ul>
+  <MemberGroups {groups} threshold={session.threshold} />
 </section>
 
 <p class="foot">
@@ -197,21 +194,13 @@
     letter-spacing: -0.01em;
   }
 
-  .faces {
-    display: flex;
-  }
-
-  .faces span + span {
+  /* The header faces overlap as a stack; borders keep each avatar readable. */
+  .faces :global(.faces .sf-avatar + .sf-avatar) {
     margin-left: -0.45rem;
   }
 
-  .faces .sf-avatar {
+  .faces :global(.faces .sf-avatar) {
     border: 2px solid var(--sf-bg);
-  }
-
-  .more {
-    background: #d0d5dd;
-    color: var(--sf-ink);
   }
 
   .balance {
@@ -353,40 +342,6 @@
     color: var(--sf-primary);
     font: 600 0.75rem var(--sf-font);
     cursor: pointer;
-  }
-
-  .members ul {
-    display: grid;
-    gap: 0.4rem;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .members li {
-    display: flex;
-    align-items: center;
-    gap: 0.65rem;
-    padding: 0.55rem 0.7rem;
-    border: 1px solid var(--sf-line);
-    border-radius: var(--sf-radius-md);
-    background: var(--sf-surface);
-  }
-
-  .who {
-    display: grid;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .name {
-    font-weight: 600;
-    font-size: 0.9375rem;
-  }
-
-  .sub {
-    color: var(--sf-muted);
-    font-size: 0.75rem;
   }
 
   .foot {

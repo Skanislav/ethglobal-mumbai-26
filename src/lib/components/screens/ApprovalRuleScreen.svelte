@@ -1,22 +1,17 @@
 <script lang="ts">
-  import { avatarClass, initial } from '../../format';
-  import type { MemberRow } from '../../session';
+  import MemberGroups from '../MemberGroups.svelte';
+  import { memberGroups } from '../../session';
+  import type { Session } from '../../session';
 
   let {
-    roster,
-    ownerCount,
+    session,
     threshold,
     onThreshold,
     onCreateVault,
     busy = false,
     error = '',
   }: {
-    roster: MemberRow[];
-    /**
-     * Owners the Safe will actually have. The threshold counts these, never the
-     * invited names: an invited member holds no key yet and cannot approve.
-     */
-    ownerCount: number;
+    session: Session;
     threshold: number;
     onThreshold: (n: number) => void;
     onCreateVault: () => void;
@@ -24,8 +19,14 @@
     error?: string;
   } = $props();
 
+  /**
+   * Owners the Safe will actually have. The threshold counts these, never the
+   * invited names: an invited member holds no key yet and cannot approve.
+   */
+  const ownerCount = $derived(session.signers.length);
+  const groups = $derived(memberGroups(session));
   const total = $derived(Math.max(ownerCount, 1));
-  const invited = $derived(Math.max(roster.length - ownerCount, 0));
+  const invited = $derived(Math.max(groups.length - session.signers.length, 0));
   const recommended = $derived(Math.max(2, Math.ceil(total / 2)));
 
   function step(delta: number): void {
@@ -47,16 +48,7 @@
     <button class="round" onclick={() => step(1)} disabled={threshold >= total} aria-label="More approvals">+</button>
   </div>
 
-  <div class="faces">
-    {#each roster as member, index (member.name + index)}
-      <span
-        class={[`sf-avatar ${avatarClass(index)}`, { dim: !member.joined || index >= threshold }]}
-        title={member.joined ? member.name : `${member.name} — invited, cannot approve yet`}
-      >
-        {initial(member.name)}
-      </span>
-    {/each}
-  </div>
+  <MemberGroups {groups} {threshold} variant="faces" />
 
   {#if threshold === recommended && total > 1}
     <p class="rec"><span class="sf-chip sf-chip--ok">✓ Recommended for {total} people</span></p>
@@ -164,15 +156,6 @@
   .of {
     font-size: 0.8125rem;
     color: var(--sf-muted);
-  }
-
-  .faces {
-    display: flex;
-    gap: 0.35rem;
-  }
-
-  .dim {
-    opacity: 0.35;
   }
 
   .rec {
